@@ -1,41 +1,28 @@
-from dataclasses import dataclass
-from functools import lru_cache
-from fastapi import Depends, HTTPException
-from pathlib import Path
-from src.infrastructure.storage_backend import LocalDirectoryStorage
-from src.services.material_repository import MaterialRepository
-from src.services.properties_catalog import PropertiesCatalog
-from src.services.hardness_table import HardnessTable
-from src.services.source_service import SourceService
+from __future__ import annotations
 
-@dataclass
-class AppState:
-    properties: PropertiesCatalog | None = None
-    hardness: HardnessTable | None = None
-    sources: SourceService | None = None
+from fastapi import Depends, HTTPException, Request
+from sqlalchemy.orm import Session
 
-    storage: LocalDirectoryStorage | None = None
-    repository: MaterialRepository | None = None
+from backend.database import get_session
+from src.identity import current_user
+from src.services import acl
 
-@lru_cache
-def get_app_state() -> AppState:
-    """Один экземпляр AppState на процесс uvicorn."""
-    return AppState(
-        properties = PropertiesCatalog(),
-        hardness = HardnessTable(),
-        sources = SourceService()
-    )
 
-def get_state() -> AppState:
-    return get_app_state()
+def get_db(session: Session = Depends(get_session)) -> Session:
+    return session
 
-def get_repository(state: AppState = Depends(get_state)) -> MaterialRepository:
-    if state.repository is None:
-        raise HTTPException(status_code = 409, detail="Workspace не открыт")
-    return state.repository
 
-def open_workspace(state: AppState, directory: Path) -> MaterialRepository:
-    state.storage = LocalDirectoryStorage(directory)
-    state.repository = MaterialRepository(source_service = state.sources, storage=state.storage)
-    state.repository.load_materials_from_dir(directory)
-    return state.repository
+def get_username(request: Request) -> str:
+    return current_user(request)
+
+
+def require_reader(username: str = Depends(get_username)) -> str:
+    if not acl.can_read(username):
+        raise HTTPException(status_code=403, detail="Нет доступа к Гранд сводке")
+    return username
+
+
+def require_editor(username: str = Depends(get_username)) -> str:
+    if not acl.can_write(username):
+        raise HTTPException(status_code=403, detail="Нет прав на изменение (только отдел ОР)")
+    return username

@@ -1,0 +1,1677 @@
+{
+  "template": "default.XLS",
+  "sheet_hint": "шаблон гранд-сводки",
+  "header_rows": [
+    1,
+    2,
+    3
+  ],
+  "columns": [
+    {
+      "key": "s1",
+      "label": "1",
+      "kind": "stage",
+      "order": 0
+    },
+    {
+      "key": "s2",
+      "label": "2",
+      "kind": "stage",
+      "order": 1
+    },
+    {
+      "key": "s3",
+      "label": "3",
+      "kind": "stage",
+      "order": 2
+    },
+    {
+      "key": "s4",
+      "label": "4",
+      "kind": "stage",
+      "order": 3
+    },
+    {
+      "key": "s5",
+      "label": "5",
+      "kind": "stage",
+      "order": 4
+    },
+    {
+      "key": "s6",
+      "label": "6",
+      "kind": "stage",
+      "order": 5
+    },
+    {
+      "key": "s7",
+      "label": "7",
+      "kind": "stage",
+      "order": 6
+    },
+    {
+      "key": "s8",
+      "label": "8",
+      "kind": "stage",
+      "order": 7
+    },
+    {
+      "key": "s9",
+      "label": "9",
+      "kind": "stage",
+      "order": 8
+    },
+    {
+      "key": "s10",
+      "label": "10",
+      "kind": "stage",
+      "order": 9
+    },
+    {
+      "key": "s11",
+      "label": "11",
+      "kind": "stage",
+      "order": 10
+    },
+    {
+      "key": "s12",
+      "label": "12",
+      "kind": "stage",
+      "order": 11
+    },
+    {
+      "key": "s13",
+      "label": "13",
+      "kind": "stage",
+      "order": 12
+    },
+    {
+      "key": "s14",
+      "label": "14",
+      "kind": "stage",
+      "order": 13
+    },
+    {
+      "key": "s15",
+      "label": "15",
+      "kind": "stage",
+      "order": 14
+    },
+    {
+      "key": "s16",
+      "label": "16",
+      "kind": "stage",
+      "order": 15
+    },
+    {
+      "key": "s17",
+      "label": "17",
+      "kind": "stage",
+      "order": 16
+    },
+    {
+      "key": "s18",
+      "label": "18",
+      "kind": "stage",
+      "order": 17
+    },
+    {
+      "key": "s19",
+      "label": "19",
+      "kind": "stage",
+      "order": 18
+    },
+    {
+      "key": "s20",
+      "label": "20",
+      "kind": "stage",
+      "order": 19
+    },
+    {
+      "key": "s21",
+      "label": "21",
+      "kind": "stage",
+      "order": 20
+    },
+    {
+      "key": "s22",
+      "label": "22",
+      "kind": "stage",
+      "order": 21
+    },
+    {
+      "key": "s23",
+      "label": "23",
+      "kind": "stage",
+      "order": 22
+    },
+    {
+      "key": "s24",
+      "label": "24",
+      "kind": "stage",
+      "order": 23
+    },
+    {
+      "key": "s25",
+      "label": "25",
+      "kind": "stage",
+      "order": 24
+    },
+    {
+      "key": "s26",
+      "label": "26",
+      "kind": "stage",
+      "order": 25
+    },
+    {
+      "key": "s27",
+      "label": "27",
+      "kind": "stage",
+      "order": 26
+    },
+    {
+      "key": "s28_33",
+      "label": "28 (33)",
+      "kind": "stage",
+      "order": 27
+    },
+    {
+      "key": "s29_34",
+      "label": "29 (34)",
+      "kind": "stage",
+      "order": 28
+    },
+    {
+      "key": "s30_35",
+      "label": "30 (35)",
+      "kind": "stage",
+      "order": 29
+    },
+    {
+      "key": "s31_36",
+      "label": "31 (36)",
+      "kind": "stage",
+      "order": 30
+    },
+    {
+      "key": "s32_37",
+      "label": "32 (37)",
+      "kind": "stage",
+      "order": 31
+    },
+    {
+      "key": "pku_1",
+      "label": "1 ПКУ",
+      "kind": "pku",
+      "order": 32
+    },
+    {
+      "key": "pku_2",
+      "label": "2 ПКУ",
+      "kind": "pku",
+      "order": 33
+    },
+    {
+      "key": "pku_3",
+      "label": "3 ПКУ",
+      "kind": "pku",
+      "order": 34
+    },
+    {
+      "key": "pku_4",
+      "label": "4 ПКУ",
+      "kind": "pku",
+      "order": 35
+    },
+    {
+      "key": "zku_1",
+      "label": "1 ЗКУ",
+      "kind": "zku",
+      "order": 36
+    },
+    {
+      "key": "zku_2",
+      "label": "2 ЗКУ",
+      "kind": "zku",
+      "order": 37
+    },
+    {
+      "key": "zku_3",
+      "label": "3 ЗКУ",
+      "kind": "zku",
+      "order": 38
+    }
+  ],
+  "parameters": [
+    {
+      "key": "r004",
+      "excel_row": 4,
+      "label": "Характеристики проточной части:",
+      "label_raw": "Характеристики проточной части:",
+      "group": "r004",
+      "indent": 0,
+      "row_kind": "section",
+      "unit": null,
+      "order": 0
+    },
+    {
+      "key": "r005",
+      "excel_row": 5,
+      "label": "Сопловая лопатка:",
+      "label_raw": "Сопловая лопатка:",
+      "group": "r005",
+      "indent": 0,
+      "row_kind": "section",
+      "unit": null,
+      "order": 1
+    },
+    {
+      "key": "r006",
+      "excel_row": 6,
+      "label": "Чертеж теоретического профиля",
+      "label_raw": "     Чертеж теоретического профиля",
+      "group": "r005",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": null,
+      "order": 2
+    },
+    {
+      "key": "r007",
+      "excel_row": 7,
+      "label": "Угол установки профиля в корневом сечении",
+      "label_raw": "     Угол установки профиля в корневом сечении",
+      "group": "r005",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": null,
+      "order": 3
+    },
+    {
+      "key": "r008",
+      "excel_row": 8,
+      "label": "Синус эффективного угла выхода",
+      "label_raw": "     Синус эффективного угла выхода",
+      "group": "r005",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": null,
+      "order": 4
+    },
+    {
+      "key": "r009",
+      "excel_row": 9,
+      "label": "Теоретическая выходная площадь, мм2",
+      "label_raw": "     Теоретическая выходная площадь, мм2",
+      "group": "r005",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": "мм2",
+      "order": 5
+    },
+    {
+      "key": "r010",
+      "excel_row": 10,
+      "label": "Высота сопловой лопатки, мм",
+      "label_raw": "     Высота сопловой лопатки, мм",
+      "group": "r005",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 6
+    },
+    {
+      "key": "r011",
+      "excel_row": 11,
+      "label": "Парциальность",
+      "label_raw": "     Парциальность",
+      "group": "r005",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": null,
+      "order": 7
+    },
+    {
+      "key": "r012",
+      "excel_row": 12,
+      "label": "Ширина профиля в рабочем положении (корневое сечение), мм",
+      "label_raw": "     Ширина профиля в рабочем положении (корневое сечение), мм",
+      "group": "r005",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 8
+    },
+    {
+      "key": "r013",
+      "excel_row": 13,
+      "label": "Корневой диаметр СЛ (по выходной кромке), мм",
+      "label_raw": "     Корневой диаметр СЛ (по выходной кромке), мм",
+      "group": "r005",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 9
+    },
+    {
+      "key": "r014",
+      "excel_row": 14,
+      "label": "Средний диаметр СЛ, мм",
+      "label_raw": "     Средний диаметр СЛ, мм",
+      "group": "r005",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 10
+    },
+    {
+      "key": "r015",
+      "excel_row": 15,
+      "label": "Количество СЛ (каналов при парциальной конструкции)",
+      "label_raw": "     Количество СЛ (каналов при парциальной конструкции)",
+      "group": "r005",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": null,
+      "order": 11
+    },
+    {
+      "key": "r016",
+      "excel_row": 16,
+      "label": "Материал лопатки",
+      "label_raw": "     Материал лопатки",
+      "group": "r005",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": null,
+      "order": 12
+    },
+    {
+      "key": "r017",
+      "excel_row": 17,
+      "label": "Диафрагма:",
+      "label_raw": "Диафрагма:",
+      "group": "r017",
+      "indent": 0,
+      "row_kind": "section",
+      "unit": null,
+      "order": 13
+    },
+    {
+      "key": "r018",
+      "excel_row": 18,
+      "label": "Унификация",
+      "label_raw": "     Унификация",
+      "group": "r017",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": null,
+      "order": 14
+    },
+    {
+      "key": "r019",
+      "excel_row": 19,
+      "label": "Базовая конструкция (турбина, ступень)",
+      "label_raw": "     Базовая конструкция (турбина, ступень)",
+      "group": "r017",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": null,
+      "order": 15
+    },
+    {
+      "key": "r020",
+      "excel_row": 20,
+      "label": "Чертеж базовой конструкции",
+      "label_raw": "     Чертеж базовой конструкции",
+      "group": "r017",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": null,
+      "order": 16
+    },
+    {
+      "key": "r021",
+      "excel_row": 21,
+      "label": "Тип исполнения",
+      "label_raw": "     Тип исполнения",
+      "group": "r017",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": null,
+      "order": 17
+    },
+    {
+      "key": "r022",
+      "excel_row": 22,
+      "label": "Ширина тела, мм",
+      "label_raw": "     Ширина тела, мм",
+      "group": "r017",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 18
+    },
+    {
+      "key": "r023",
+      "excel_row": 23,
+      "label": "Ширина зуба, мм",
+      "label_raw": "     Ширина зуба, мм",
+      "group": "r017",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 19
+    },
+    {
+      "key": "r024",
+      "excel_row": 24,
+      "label": "Ширина пояска опирания дифрагмы, мм",
+      "label_raw": "     Ширина пояска опирания дифрагмы, мм",
+      "group": "r017",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 20
+    },
+    {
+      "key": "r025",
+      "excel_row": 25,
+      "label": "Высота обода с бандажом, мм",
+      "label_raw": "     Высота обода с бандажом, мм",
+      "group": "r017",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 21
+    },
+    {
+      "key": "r026",
+      "excel_row": 26,
+      "label": "Наружный диаметр обода, мм",
+      "label_raw": "     Наружный диаметр обода, мм",
+      "group": "r017",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 22
+    },
+    {
+      "key": "r027",
+      "excel_row": 27,
+      "label": "Угол корневого обвода",
+      "label_raw": "     Угол корневого обвода",
+      "group": "r017",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": null,
+      "order": 23
+    },
+    {
+      "key": "r028",
+      "excel_row": 28,
+      "label": "Угол периферийного обвода",
+      "label_raw": "     Угол периферийного обвода",
+      "group": "r017",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": null,
+      "order": 24
+    },
+    {
+      "key": "r029",
+      "excel_row": 29,
+      "label": "Толщина бандажа, мм",
+      "label_raw": "     Толщина бандажа, мм",
+      "group": "r017",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 25
+    },
+    {
+      "key": "r030",
+      "excel_row": 30,
+      "label": "Материал тела",
+      "label_raw": "     Материал тела",
+      "group": "r017",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": null,
+      "order": 26
+    },
+    {
+      "key": "r031",
+      "excel_row": 31,
+      "label": "Материал обода",
+      "label_raw": "     Материал обода",
+      "group": "r017",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": null,
+      "order": 27
+    },
+    {
+      "key": "r032",
+      "excel_row": 32,
+      "label": "Материал бандажа",
+      "label_raw": "     Материал бандажа",
+      "group": "r017",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": null,
+      "order": 28
+    },
+    {
+      "key": "r033",
+      "excel_row": 33,
+      "label": "Программа испытаний на прогиб",
+      "label_raw": "     Программа испытаний на прогиб",
+      "group": "r017",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": null,
+      "order": 29
+    },
+    {
+      "key": "r034",
+      "excel_row": 34,
+      "label": "Тип ДУ:",
+      "label_raw": "     Тип ДУ:",
+      "group": "r034",
+      "indent": 1,
+      "row_kind": "section",
+      "unit": null,
+      "order": 30
+    },
+    {
+      "key": "r035",
+      "excel_row": 35,
+      "label": "Диаметр ДУ (по бочке ротора), мм",
+      "label_raw": "          Диаметр ДУ (по бочке ротора), мм",
+      "group": "r034",
+      "indent": 2,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 31
+    },
+    {
+      "key": "r036",
+      "excel_row": 36,
+      "label": "Количество дросселей ДУ",
+      "label_raw": "          Количество дросселей ДУ",
+      "group": "r034",
+      "indent": 2,
+      "row_kind": "editable",
+      "unit": null,
+      "order": 32
+    },
+    {
+      "key": "r037",
+      "excel_row": 37,
+      "label": "Передний зазор в ДУ по ходу пара (номинальный), мм",
+      "label_raw": "          Передний зазор в ДУ по ходу пара (номинальный), мм",
+      "group": "r034",
+      "indent": 2,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 33
+    },
+    {
+      "key": "r038",
+      "excel_row": 38,
+      "label": "Задний зазор в ДУ по ходу пара (номинальный), мм",
+      "label_raw": "          Задний зазор в ДУ по ходу пара (номинальный), мм",
+      "group": "r034",
+      "indent": 2,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 34
+    },
+    {
+      "key": "r039",
+      "excel_row": 39,
+      "label": "Рабочая лопатка:",
+      "label_raw": "Рабочая лопатка:",
+      "group": "r039",
+      "indent": 0,
+      "row_kind": "section",
+      "unit": null,
+      "order": 35
+    },
+    {
+      "key": "r040",
+      "excel_row": 40,
+      "label": "Унификация",
+      "label_raw": "     Унификация",
+      "group": "r039",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": null,
+      "order": 36
+    },
+    {
+      "key": "r041",
+      "excel_row": 41,
+      "label": "Базовая конструкция (турбина, ступень)",
+      "label_raw": "     Базовая конструкция (турбина, ступень)",
+      "group": "r039",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": null,
+      "order": 37
+    },
+    {
+      "key": "r042",
+      "excel_row": 42,
+      "label": "Чертеж базовой конструкции",
+      "label_raw": "     Чертеж базовой конструкции",
+      "group": "r039",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": null,
+      "order": 38
+    },
+    {
+      "key": "r043",
+      "excel_row": 43,
+      "label": "Чертеж теоретического профиля",
+      "label_raw": "     Чертеж теоретического профиля",
+      "group": "r039",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": null,
+      "order": 39
+    },
+    {
+      "key": "r044",
+      "excel_row": 44,
+      "label": "Чертеж рабочей лопатки",
+      "label_raw": "     Чертеж рабочей лопатки",
+      "group": "r039",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": null,
+      "order": 40
+    },
+    {
+      "key": "r045",
+      "excel_row": 45,
+      "label": "Чертеж предзамковой лопатки",
+      "label_raw": "     Чертеж предзамковой лопатки",
+      "group": "r039",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": null,
+      "order": 41
+    },
+    {
+      "key": "r046",
+      "excel_row": 46,
+      "label": "Чертеж замковой лопатки",
+      "label_raw": "     Чертеж замковой лопатки",
+      "group": "r039",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": null,
+      "order": 42
+    },
+    {
+      "key": "r047",
+      "excel_row": 47,
+      "label": "Высота РЛ, мм",
+      "label_raw": "     Высота РЛ, мм",
+      "group": "r039",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 43
+    },
+    {
+      "key": "r048",
+      "excel_row": 48,
+      "label": "Корневой диаметр РЛ, мм",
+      "label_raw": "     Корневой диаметр РЛ, мм",
+      "group": "r039",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 44
+    },
+    {
+      "key": "r049",
+      "excel_row": 49,
+      "label": "Средний диаметр РЛ, мм",
+      "label_raw": "     Средний диаметр РЛ, мм",
+      "group": "r039",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 45
+    },
+    {
+      "key": "r050",
+      "excel_row": 50,
+      "label": "Количество РЛ",
+      "label_raw": "     Количество РЛ",
+      "group": "r039",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": null,
+      "order": 46
+    },
+    {
+      "key": "r051",
+      "excel_row": 51,
+      "label": "Синус эффективного угла выхода",
+      "label_raw": "     Синус эффективного угла выхода",
+      "group": "r039",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": null,
+      "order": 47
+    },
+    {
+      "key": "r052",
+      "excel_row": 52,
+      "label": "Теоретическая выходная площадь, мм2",
+      "label_raw": "     Теоретическая выходная площадь, мм2",
+      "group": "r039",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": "мм2",
+      "order": 48
+    },
+    {
+      "key": "r053",
+      "excel_row": 53,
+      "label": "Материал лопатки",
+      "label_raw": "     Материал лопатки",
+      "group": "r039",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": null,
+      "order": 49
+    },
+    {
+      "key": "r054",
+      "excel_row": 54,
+      "label": "Виброотстройка",
+      "label_raw": "     Виброотстройка",
+      "group": "r039",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": null,
+      "order": 50
+    },
+    {
+      "key": "r055",
+      "excel_row": 55,
+      "label": "Угол корневого обвода (по выходной кромке)",
+      "label_raw": "     Угол корневого обвода (по выходной кромке)",
+      "group": "r039",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": null,
+      "order": 51
+    },
+    {
+      "key": "r056",
+      "excel_row": 56,
+      "label": "Угол периферийного обвода (по выходной кромке)",
+      "label_raw": "     Угол периферийного обвода (по выходной кромке)",
+      "group": "r039",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": null,
+      "order": 52
+    },
+    {
+      "key": "r057",
+      "excel_row": 57,
+      "label": "Связи",
+      "label_raw": "     Связи",
+      "group": "r039",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": null,
+      "order": 53
+    },
+    {
+      "key": "r058",
+      "excel_row": 58,
+      "label": "Профиль связи",
+      "label_raw": "     Профиль связи",
+      "group": "r039",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": null,
+      "order": 54
+    },
+    {
+      "key": "r059",
+      "excel_row": 59,
+      "label": "Хвостовик",
+      "label_raw": "     Хвостовик",
+      "group": "r059",
+      "indent": 1,
+      "row_kind": "section",
+      "unit": null,
+      "order": 55
+    },
+    {
+      "key": "r060",
+      "excel_row": 60,
+      "label": "Тип",
+      "label_raw": "          Тип",
+      "group": "r059",
+      "indent": 2,
+      "row_kind": "editable",
+      "unit": null,
+      "order": 56
+    },
+    {
+      "key": "r061",
+      "excel_row": 61,
+      "label": "Чертеж профиля хвостовика",
+      "label_raw": "          Чертеж профиля хвостовика",
+      "group": "r059",
+      "indent": 2,
+      "row_kind": "editable",
+      "unit": null,
+      "order": 57
+    },
+    {
+      "key": "r062",
+      "excel_row": 62,
+      "label": "Ширина шейки, мм",
+      "label_raw": "          Ширина шейки, мм",
+      "group": "r059",
+      "indent": 2,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 58
+    },
+    {
+      "key": "r063",
+      "excel_row": 63,
+      "label": "Высота промтела, мм",
+      "label_raw": "          Высота промтела, мм",
+      "group": "r059",
+      "indent": 2,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 59
+    },
+    {
+      "key": "r064",
+      "excel_row": 64,
+      "label": "Натяг на ступень, мм",
+      "label_raw": "          Натяг на ступень, мм",
+      "group": "r059",
+      "indent": 2,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 60
+    },
+    {
+      "key": "r065",
+      "excel_row": 65,
+      "label": "Припуск на хвостовик замковой лопатки, мм",
+      "label_raw": "          Припуск на хвостовик замковой лопатки, мм",
+      "group": "r059",
+      "indent": 2,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 61
+    },
+    {
+      "key": "r066",
+      "excel_row": 66,
+      "label": "Количество заклепок",
+      "label_raw": "          Количество заклепок",
+      "group": "r059",
+      "indent": 2,
+      "row_kind": "editable",
+      "unit": null,
+      "order": 62
+    },
+    {
+      "key": "r067",
+      "excel_row": 67,
+      "label": "Диаметр заклепок, мм",
+      "label_raw": "          Диаметр заклепок, мм",
+      "group": "r059",
+      "indent": 2,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 63
+    },
+    {
+      "key": "r068",
+      "excel_row": 68,
+      "label": "Расположение оси верхней (или нижней для хвостовиков Г) заклепки относительно обода диска, мм",
+      "label_raw": "          Расположение оси верхней (или нижней для хвостовиков Г) заклепки относительно обода диска, мм",
+      "group": "r059",
+      "indent": 2,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 64
+    },
+    {
+      "key": "r069",
+      "excel_row": 69,
+      "label": "Расстояние между осями заклепок, мм",
+      "label_raw": "          Расстояние между осями заклепок, мм",
+      "group": "r059",
+      "indent": 2,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 65
+    },
+    {
+      "key": "r070",
+      "excel_row": 70,
+      "label": "Материал заклепки",
+      "label_raw": "          Материал заклепки",
+      "group": "r059",
+      "indent": 2,
+      "row_kind": "editable",
+      "unit": null,
+      "order": 66
+    },
+    {
+      "key": "r071",
+      "excel_row": 71,
+      "label": "Тип НБУ",
+      "label_raw": "     Тип НБУ",
+      "group": "r071",
+      "indent": 1,
+      "row_kind": "section",
+      "unit": null,
+      "order": 67
+    },
+    {
+      "key": "r072",
+      "excel_row": 72,
+      "label": "Радиальный зазор НБУ, мм",
+      "label_raw": "          Радиальный зазор НБУ, мм",
+      "group": "r071",
+      "indent": 2,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 68
+    },
+    {
+      "key": "r073",
+      "excel_row": 73,
+      "label": "Количество дросселей НБУ",
+      "label_raw": "          Количество дросселей НБУ",
+      "group": "r071",
+      "indent": 2,
+      "row_kind": "editable",
+      "unit": null,
+      "order": 69
+    },
+    {
+      "key": "r074",
+      "excel_row": 74,
+      "label": "Передний по ходу пара зазор в НБУ (лаб.тип.упл.), мм",
+      "label_raw": "          Передний по ходу пара зазор в НБУ (лаб.тип.упл.), мм",
+      "group": "r071",
+      "indent": 2,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 70
+    },
+    {
+      "key": "r075",
+      "excel_row": 75,
+      "label": "Задний по ходу пара зазор в НБУ (лаб.тип.упл.), мм",
+      "label_raw": "          Задний по ходу пара зазор в НБУ (лаб.тип.упл.), мм",
+      "group": "r071",
+      "indent": 2,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 71
+    },
+    {
+      "key": "r076",
+      "excel_row": 76,
+      "label": "Толщина бандажной ленты, мм",
+      "label_raw": "          Толщина бандажной ленты, мм",
+      "group": "r071",
+      "indent": 2,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 72
+    },
+    {
+      "key": "r077",
+      "excel_row": 77,
+      "label": "Межвенцовые / межступенчатые зазоры:",
+      "label_raw": "Межвенцовые / межступенчатые зазоры:",
+      "group": "r077",
+      "indent": 0,
+      "row_kind": "section",
+      "unit": null,
+      "order": 73
+    },
+    {
+      "key": "r078",
+      "excel_row": 78,
+      "label": "Перифирийный внутриступенчатый зазор, мм",
+      "label_raw": "     Перифирийный внутриступенчатый зазор, мм",
+      "group": "r077",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 74
+    },
+    {
+      "key": "r079",
+      "excel_row": 79,
+      "label": "Корневой внутриступенчатый зазор, мм",
+      "label_raw": "     Корневой внутриступенчатый зазор, мм",
+      "group": "r077",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 75
+    },
+    {
+      "key": "r080",
+      "excel_row": 80,
+      "label": "Внутриступенчатый зазор, мм",
+      "label_raw": "     Внутриступенчатый зазор, мм",
+      "group": "r077",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 76
+    },
+    {
+      "key": "r081",
+      "excel_row": 81,
+      "label": "Межступенчатый зазор, мм",
+      "label_raw": "     Межступенчатый зазор, мм",
+      "group": "r077",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 77
+    },
+    {
+      "key": "r082",
+      "excel_row": 82,
+      "label": "Диски:",
+      "label_raw": "Диски:",
+      "group": "r082",
+      "indent": 0,
+      "row_kind": "section",
+      "unit": null,
+      "order": 78
+    },
+    {
+      "key": "r083",
+      "excel_row": 83,
+      "label": "Ширина обода диска, мм",
+      "label_raw": "     Ширина обода диска, мм",
+      "group": "r082",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 79
+    },
+    {
+      "key": "r084",
+      "excel_row": 84,
+      "label": "Угол конуса (сторона входа пара / сторона выхода)",
+      "label_raw": "     Угол конуса (сторона входа пара / сторона выхода)",
+      "group": "r082",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": null,
+      "order": 80
+    },
+    {
+      "key": "r085",
+      "excel_row": 85,
+      "label": "Диаметр расположения балансировочного паза (при наличии), мм",
+      "label_raw": "     Диаметр расположения балансировочного паза (при наличии), мм",
+      "group": "r082",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 81
+    },
+    {
+      "key": "r086",
+      "excel_row": 86,
+      "label": "Диаметр диска под замком, мм",
+      "label_raw": "     Диаметр диска под замком, мм",
+      "group": "r082",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 82
+    },
+    {
+      "key": "r087",
+      "excel_row": 87,
+      "label": "Диаметр проточки диска по заплечикам, мм",
+      "label_raw": "     Диаметр проточки диска по заплечикам, мм",
+      "group": "r082",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 83
+    },
+    {
+      "key": "r088",
+      "excel_row": 88,
+      "label": "Радиус галтели диска (сторона входа пара / сторона выхода), мм",
+      "label_raw": "     Радиус галтели диска (сторона входа пара / сторона выхода), мм",
+      "group": "r082",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 84
+    },
+    {
+      "key": "r089",
+      "excel_row": 89,
+      "label": "Ширина замкового колодца, мм",
+      "label_raw": "     Ширина замкового колодца, мм",
+      "group": "r082",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 85
+    },
+    {
+      "key": "r090",
+      "excel_row": 90,
+      "label": "Глубина замкового колодца, мм",
+      "label_raw": "     Глубина замкового колодца, мм",
+      "group": "r082",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 86
+    },
+    {
+      "key": "r091",
+      "excel_row": 91,
+      "label": "Материал диска",
+      "label_raw": "     Материал диска",
+      "group": "r082",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": null,
+      "order": 87
+    },
+    {
+      "key": "r092",
+      "excel_row": 92,
+      "label": "ПРО",
+      "label_raw": "     ПРО",
+      "group": "r092",
+      "indent": 1,
+      "row_kind": "section",
+      "unit": null,
+      "order": 88
+    },
+    {
+      "key": "r093",
+      "excel_row": 93,
+      "label": "Диаметр расположения ПРО, мм",
+      "label_raw": "          Диаметр расположения ПРО, мм",
+      "group": "r092",
+      "indent": 2,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 89
+    },
+    {
+      "key": "r094",
+      "excel_row": 94,
+      "label": "Количество ПРО",
+      "label_raw": "          Количество ПРО",
+      "group": "r092",
+      "indent": 2,
+      "row_kind": "editable",
+      "unit": null,
+      "order": 90
+    },
+    {
+      "key": "r095",
+      "excel_row": 95,
+      "label": "Диаметр ПРО, мм",
+      "label_raw": "          Диаметр ПРО, мм",
+      "group": "r092",
+      "indent": 2,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 91
+    },
+    {
+      "key": "r096",
+      "excel_row": 96,
+      "label": "Радиус скругления ПРО на диске, мм",
+      "label_raw": "          Радиус скругления ПРО на диске, мм",
+      "group": "r092",
+      "indent": 2,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 92
+    },
+    {
+      "key": "r097",
+      "excel_row": 97,
+      "label": "Концевые уплотнения (по отсекам):",
+      "label_raw": "Концевые уплотнения (по отсекам):",
+      "group": "r097",
+      "indent": 0,
+      "row_kind": "section",
+      "unit": null,
+      "order": 93
+    },
+    {
+      "key": "r098",
+      "excel_row": 98,
+      "label": "Диаметр бочки ротора, мм",
+      "label_raw": "     Диаметр бочки ротора, мм",
+      "group": "r097",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 94
+    },
+    {
+      "key": "r099",
+      "excel_row": 99,
+      "label": "Количество дросселей",
+      "label_raw": "     Количество дросселей",
+      "group": "r097",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": null,
+      "order": 95
+    },
+    {
+      "key": "r100",
+      "excel_row": 100,
+      "label": "Радиальный зазор, мм",
+      "label_raw": "     Радиальный зазор, мм",
+      "group": "r097",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 96
+    },
+    {
+      "key": "r101",
+      "excel_row": 101,
+      "label": "Передний по ходу пара зазор (лаб.тип.упл.), мм",
+      "label_raw": "     Передний по ходу пара зазор (лаб.тип.упл.), мм",
+      "group": "r097",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 97
+    },
+    {
+      "key": "r102",
+      "excel_row": 102,
+      "label": "Задний по ходу пара зазор (лаб.тип.упл.), мм",
+      "label_raw": "     Задний по ходу пара зазор (лаб.тип.упл.), мм",
+      "group": "r097",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 98
+    },
+    {
+      "key": "r103",
+      "excel_row": 103,
+      "label": "Полумуфты:",
+      "label_raw": "Полумуфты:",
+      "group": "r103",
+      "indent": 0,
+      "row_kind": "section",
+      "unit": null,
+      "order": 99
+    },
+    {
+      "key": "r104",
+      "excel_row": 104,
+      "label": "Полумуфта РТ:",
+      "label_raw": "     Полумуфта РТ:",
+      "group": "r104",
+      "indent": 1,
+      "row_kind": "section",
+      "unit": null,
+      "order": 100
+    },
+    {
+      "key": "r105",
+      "excel_row": 105,
+      "label": "Диаметр расточки под стяжные болты, мм",
+      "label_raw": "          Диаметр расточки под стяжные болты, мм",
+      "group": "r104",
+      "indent": 2,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 101
+    },
+    {
+      "key": "r106",
+      "excel_row": 106,
+      "label": "Диаметр призонной части болтов, мм",
+      "label_raw": "          Диаметр призонной части болтов, мм",
+      "group": "r104",
+      "indent": 2,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 102
+    },
+    {
+      "key": "r107",
+      "excel_row": 107,
+      "label": "Длина посадочной поверхности под насадную полумуфту, мм",
+      "label_raw": "          Длина посадочной поверхности под насадную полумуфту, мм",
+      "group": "r104",
+      "indent": 2,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 103
+    },
+    {
+      "key": "r108",
+      "excel_row": 108,
+      "label": "Толщина фланца полумуфты, мм",
+      "label_raw": "          Толщина фланца полумуфты, мм",
+      "group": "r104",
+      "indent": 2,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 104
+    },
+    {
+      "key": "r109",
+      "excel_row": 109,
+      "label": "Внешний диаметр фланца полумуфты, мм",
+      "label_raw": "          Внешний диаметр фланца полумуфты, мм",
+      "group": "r104",
+      "indent": 2,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 105
+    },
+    {
+      "key": "r110",
+      "excel_row": 110,
+      "label": "Полумуфта РГ:",
+      "label_raw": "     Полумуфта РГ:",
+      "group": "r110",
+      "indent": 1,
+      "row_kind": "section",
+      "unit": null,
+      "order": 106
+    },
+    {
+      "key": "r111",
+      "excel_row": 111,
+      "label": "Диаметр расточки под стяжные болты, мм",
+      "label_raw": "          Диаметр расточки под стяжные болты, мм",
+      "group": "r110",
+      "indent": 2,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 107
+    },
+    {
+      "key": "r112",
+      "excel_row": 112,
+      "label": "Диаметр призонной части болтов, мм",
+      "label_raw": "          Диаметр призонной части болтов, мм",
+      "group": "r110",
+      "indent": 2,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 108
+    },
+    {
+      "key": "r113",
+      "excel_row": 113,
+      "label": "Длина посадочной поверхности под насадную полумуфту, мм",
+      "label_raw": "          Длина посадочной поверхности под насадную полумуфту, мм",
+      "group": "r110",
+      "indent": 2,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 109
+    },
+    {
+      "key": "r114",
+      "excel_row": 114,
+      "label": "Толщина фланца полумуфты, мм",
+      "label_raw": "          Толщина фланца полумуфты, мм",
+      "group": "r110",
+      "indent": 2,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 110
+    },
+    {
+      "key": "r115",
+      "excel_row": 115,
+      "label": "Внешний диаметр фланца полумуфты, мм",
+      "label_raw": "          Внешний диаметр фланца полумуфты, мм",
+      "group": "r110",
+      "indent": 2,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 111
+    },
+    {
+      "key": "r116",
+      "excel_row": 116,
+      "label": "Подшипник задний РВД:",
+      "label_raw": "Подшипник задний РВД:",
+      "group": "r116",
+      "indent": 0,
+      "row_kind": "section",
+      "unit": null,
+      "order": 112
+    },
+    {
+      "key": "r117",
+      "excel_row": 117,
+      "label": "Диаметр шейки, мм",
+      "label_raw": "     Диаметр шейки, мм",
+      "group": "r116",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 113
+    },
+    {
+      "key": "r118",
+      "excel_row": 118,
+      "label": "Расстояние от оси переднего подшипника до упорного гребня, мм",
+      "label_raw": "     Расстояние от оси переднего подшипника до упорного гребня, мм",
+      "group": "r116",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 114
+    },
+    {
+      "key": "r119",
+      "excel_row": 119,
+      "label": "Длина участка шейки, мм",
+      "label_raw": "     Длина участка шейки, мм",
+      "group": "r116",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 115
+    },
+    {
+      "key": "r120",
+      "excel_row": 120,
+      "label": "Диаметр упорного гребня по периферии, мм",
+      "label_raw": "     Диаметр упорного гребня по периферии, мм",
+      "group": "r116",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 116
+    },
+    {
+      "key": "r121",
+      "excel_row": 121,
+      "label": "Диаметр допустимого поднутрения у упорного гребня, мм",
+      "label_raw": "     Диаметр допустимого поднутрения у упорного гребня, мм",
+      "group": "r116",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 117
+    },
+    {
+      "key": "r122",
+      "excel_row": 122,
+      "label": "Ротор:",
+      "label_raw": "Ротор:",
+      "group": "r122",
+      "indent": 0,
+      "row_kind": "section",
+      "unit": null,
+      "order": 118
+    },
+    {
+      "key": "r123",
+      "excel_row": 123,
+      "label": "Общая длина ротора (без проставки), мм",
+      "label_raw": "     Общая длина ротора (без проставки), мм",
+      "group": "r122",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 119
+    },
+    {
+      "key": "r124",
+      "excel_row": 124,
+      "label": "Диаметр центрального канала, мм",
+      "label_raw": "     Диаметр центрального канала, мм",
+      "group": "r122",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 120
+    },
+    {
+      "key": "r125",
+      "excel_row": 125,
+      "label": "Межопорное расстояние, мм",
+      "label_raw": "     Межопорное расстояние, мм",
+      "group": "r122",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 121
+    },
+    {
+      "key": "r126",
+      "excel_row": 126,
+      "label": "Длина консолей:",
+      "label_raw": "     Длина консолей:",
+      "group": "r126",
+      "indent": 1,
+      "row_kind": "section",
+      "unit": null,
+      "order": 122
+    },
+    {
+      "key": "r127",
+      "excel_row": 127,
+      "label": "Левая, мм",
+      "label_raw": "          Левая, мм",
+      "group": "r126",
+      "indent": 2,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 123
+    },
+    {
+      "key": "r128",
+      "excel_row": 128,
+      "label": "Правая, мм",
+      "label_raw": "          Правая, мм",
+      "group": "r126",
+      "indent": 2,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 124
+    },
+    {
+      "key": "r129",
+      "excel_row": 129,
+      "label": "Диаметр ротора под маслными уплотнениями:",
+      "label_raw": "     Диаметр ротора под маслными уплотнениями:",
+      "group": "r129",
+      "indent": 1,
+      "row_kind": "section",
+      "unit": null,
+      "order": 125
+    },
+    {
+      "key": "r130",
+      "excel_row": 130,
+      "label": "Передние масляные уплотнения 1, мм",
+      "label_raw": "          Передние масляные уплотнения 1, мм",
+      "group": "r129",
+      "indent": 2,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 126
+    },
+    {
+      "key": "r131",
+      "excel_row": 131,
+      "label": "Передние масляные уплотнения 2, мм",
+      "label_raw": "          Передние масляные уплотнения 2, мм",
+      "group": "r129",
+      "indent": 2,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 127
+    },
+    {
+      "key": "r132",
+      "excel_row": 132,
+      "label": "Задние масляные уплотнения, мм",
+      "label_raw": "          Задние масляные уплотнения, мм",
+      "group": "r129",
+      "indent": 2,
+      "row_kind": "editable",
+      "unit": "мм",
+      "order": 128
+    },
+    {
+      "key": "r133",
+      "excel_row": 133,
+      "label": "Изменение массо-геометрических характеристик цельнокованных дисков (да/нет)",
+      "label_raw": "     Изменение массо-геометрических характеристик цельнокованных дисков (да/нет)",
+      "group": "r122",
+      "indent": 1,
+      "row_kind": "editable",
+      "unit": null,
+      "order": 129
+    }
+  ]
+}
