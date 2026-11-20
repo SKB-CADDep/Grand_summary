@@ -4,7 +4,9 @@ import json
 import uuid
 from datetime import datetime, timezone
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import set_committed_value
 
 from backend.models import Cell, CellChange, Notification, ObjectItem, Version, Workbook
 from src.catalog import column_by_key, columns, parameter_by_key, parameters
@@ -80,8 +82,38 @@ def _save_json(workbook: Workbook, field: str, payload) -> None:
     setattr(workbook, field, json.dumps(payload, ensure_ascii=False))
 
 
+def column_overrides(workbook: Workbook) -> dict:
+    raw = getattr(workbook, "column_overrides_json", None) or "{}"
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def deleted_column_keys(workbook: Workbook) -> set[str]:
+    raw = getattr(workbook, "deleted_columns_json", None) or "[]"
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return set()
+    return {str(item) for item in data} if isinstance(data, list) else set()
+
+
 def workbook_columns(workbook: Workbook) -> list[dict]:
-    return columns() + extra_columns(workbook)
+    overrides = column_overrides(workbook)
+    deleted = deleted_column_keys(workbook)
+    result = []
+    for item in [*columns(), *extra_columns(workbook)]:
+        key = item["key"]
+        if key in deleted:
+            continue
+        column = dict(item)
+        label = overrides.get(key)
+        if isinstance(label, str) and label.strip():
+            column["label"] = label
+        result.append(column)
+    return result
 
 
 def workbook_parameters(workbook: Workbook | None = None) -> list[dict]:
@@ -121,6 +153,8 @@ def resolve_column(workbook: Workbook, key: str) -> dict | None:
     for item in workbook_columns(workbook):
         if item["key"] == key:
             return item
+    if key in deleted_column_keys(workbook):
+        return None
     return column_by_key(key)
 
 
@@ -140,6 +174,7 @@ def cell_to_dict(cell: Cell, workbook: Workbook | None = None) -> dict:
         "hyperlink": cell.hyperlink,
         "display": _display(cell),
         "locked": locked,
+        "unified": bool(cell.unified),
         "updated_at": _iso(cell.updated_at),
         "updated_by": cell.updated_by,
         "options": options_for(param_key),
@@ -166,10 +201,98 @@ def get_workbook(session: Session, workbook_id: str) -> Workbook | None:
     return session.get(Workbook, workbook_id)
 
 
+def list_sheet_workbooks(session: Session, workbook: Workbook) -> list[Workbook]:
+    root = workbook.parent or workbook
+    return (
+        session.query(Workbook)
+        .filter((Workbook.id == root.id) | (Workbook.parent_workbook_id == root.id))
+        .order_by(Workbook.sheet_order, Workbook.created_at)
+        .all()
+    )
+
+
+def set_primary_sheet(session: Session, workbook: Workbook, username: str) -> list[Workbook]:
+    root = workbook.parent or workbook
+    sheets = list_sheet_workbooks(session, root)
+    if all(item.id != workbook.id for item in sheets):
+        raise ValueError("Лист не найден в проекте")
+    old_primary = next((item for item in sheets if item.is_primary), None)
+    if old_primary and old_primary.id == workbook.id:
+        return sheets
+
+    for item in sheets:
+        item.is_primary = item.id == workbook.id
+    ordered = [workbook, *(item for item in sheets if item.id != workbook.id)]
+    for order, item in enumerate(ordered):
+        item.sheet_order = order
+    root.updated_at = _now()
+    old_name = old_primary.sheet_name if old_primary else "не назначен"
+    add_audit(
+        session,
+        actor=username,
+        action="primary_sheet_changed",
+        workbook=root,
+        old_value=old_primary.sheet_name if old_primary else None,
+        new_value=workbook.sheet_name,
+        summary=f"Основной лист изменён с «{old_name}» на «{workbook.sheet_name}»",
+    )
+    session.flush()
+    return ordered
+
+
+def unset_primary_sheet(session: Session, workbook: Workbook, username: str) -> list[Workbook]:
+    root = workbook.parent or workbook
+    sheets = list_sheet_workbooks(session, root)
+    if all(item.id != workbook.id for item in sheets):
+        raise ValueError("Лист не найден в проекте")
+    if not workbook.is_primary:
+        return sheets
+
+    workbook.is_primary = False
+    root.updated_at = _now()
+    add_audit(
+        session,
+        actor=username,
+        action="primary_sheet_removed",
+        workbook=root,
+        old_value=workbook.sheet_name,
+        new_value=None,
+        summary=f"С листа «{workbook.sheet_name}» снят статус основного",
+    )
+    session.flush()
+    return sheets
+
+
+def rename_sheet(session: Session, workbook: Workbook, name: str, username: str) -> Workbook:
+    root = workbook.parent or workbook
+    cleaned_name = name.strip()
+    if not cleaned_name:
+        raise ValueError("Укажите название листа")
+    siblings = list_sheet_workbooks(session, root)
+    if workbook not in siblings:
+        raise ValueError("Лист не найден в проекте")
+    if any(item.id != workbook.id and item.sheet_name.casefold() == cleaned_name.casefold() for item in siblings):
+        raise ValueError("Лист с таким названием уже существует")
+    old_name = workbook.sheet_name
+    workbook.sheet_name = cleaned_name[:255]
+    workbook.updated_at = _now()
+    add_audit(
+        session,
+        actor=username,
+        action="sheet_renamed",
+        workbook=root,
+        old_value=old_name,
+        new_value=workbook.sheet_name,
+        summary=f"Лист «{old_name}» переименован в «{workbook.sheet_name}»",
+    )
+    session.flush()
+    return workbook
+
+
 def ensure_workbook(session: Session, object_item: ObjectItem, username: str) -> tuple[Workbook, bool]:
     existing = (
         session.query(Workbook)
-        .filter(Workbook.object_id == object_item.id)
+        .filter(Workbook.object_id == object_item.id, Workbook.parent_workbook_id.is_(None))
         .order_by(Workbook.created_at.desc())
         .first()
     )
@@ -179,6 +302,7 @@ def ensure_workbook(session: Session, object_item: ObjectItem, username: str) ->
         id=_new_id(),
         object_id=object_item.id,
         created_by=username,
+        is_primary=True,
         extra_columns_json="[]",
         extra_parameters_json="[]",
         parameter_overrides_json="{}",
@@ -209,30 +333,83 @@ def get_or_create_cell(session: Session, workbook: Workbook, parameter_key: str,
         status="empty",
         locked=False,
     )
-    session.add(cell)
-    session.flush()
-    return cell
+    try:
+        with session.begin_nested():
+            session.add(cell)
+            session.flush()
+        return cell
+    except IntegrityError:
+        existing = (
+            session.query(Cell)
+            .filter(
+                Cell.workbook_id == workbook.id,
+                Cell.parameter_key == parameter_key,
+                Cell.column_key == column_key,
+            )
+            .first()
+        )
+        if existing is None:
+            raise
+        return existing
+
+
+def _cell_conflict_payload(cell: Cell) -> dict:
+    return {
+        "parameter_key": cell.parameter_key,
+        "column_key": cell.column_key,
+        "updated_by": cell.updated_by,
+        "updated_at": _iso(cell.updated_at),
+        "value": cell.value,
+        "draft_value": cell.draft_value,
+        "display": _display(cell),
+    }
 
 
 def _check_conflict(cell: Cell, expected_updated_at: str | None) -> None:
     current = _iso(cell.updated_at)
     if expected_updated_at is None or expected_updated_at == "":
         return
-    if current and current != expected_updated_at:
-        raise CellConflict(
-            {
-                "parameter_key": cell.parameter_key,
-                "column_key": cell.column_key,
-                "updated_by": cell.updated_by,
-                "updated_at": current,
-                "value": cell.value,
-                "draft_value": cell.draft_value,
-                "display": _display(cell),
-            }
-        )
+    if current != expected_updated_at:
+        raise CellConflict(_cell_conflict_payload(cell))
 
 
-def _ensure_editable(workbook: Workbook, parameter_key: str, column_key: str, cell: Cell | None = None) -> None:
+def _update_cell_if_unchanged(
+    session: Session,
+    cell: Cell,
+    values: dict,
+    *,
+    refresh: bool = True,
+    defer_flush: bool = False,
+) -> None:
+    query = session.query(Cell).filter(Cell.id == cell.id)
+    query = query.filter(
+        Cell.updated_at.is_(None) if cell.updated_at is None else Cell.updated_at == cell.updated_at
+    )
+    if defer_flush:
+        with session.no_autoflush:
+            updated_count = query.update(values, synchronize_session=False)
+    else:
+        updated_count = query.update(values, synchronize_session=False)
+    if updated_count != 1:
+        session.expire(cell)
+        session.refresh(cell)
+        raise CellConflict(_cell_conflict_payload(cell))
+    if refresh:
+        session.expire(cell)
+        session.refresh(cell)
+    else:
+        for key, value in values.items():
+            set_committed_value(cell, key, value)
+
+
+def _ensure_editable(
+    workbook: Workbook,
+    parameter_key: str,
+    column_key: str,
+    cell: Cell | None = None,
+    *,
+    allow_unified: bool = False,
+) -> None:
     param = resolve_parameter(workbook, parameter_key)
     if not param or param.get("row_kind") not in {"editable"}:
         raise ValueError("Ячейка недоступна для редактирования")
@@ -240,6 +417,45 @@ def _ensure_editable(workbook: Workbook, parameter_key: str, column_key: str, ce
         raise ValueError("Неизвестная колонка")
     if cell and cell.locked:
         raise ValueError("Ячейка заблокирована правилом унификации")
+    if cell and cell.unified and not allow_unified:
+        raise ValueError("Ячейка помечена как унифицированная и недоступна для изменения")
+
+
+def set_cell_unification(
+    session: Session,
+    workbook: Workbook,
+    parameter_key: str,
+    column_key: str,
+    username: str,
+    unified: bool,
+    expected_updated_at: str | None = None,
+) -> Cell:
+    cell = get_or_create_cell(session, workbook, parameter_key, column_key)
+    _ensure_editable(workbook, parameter_key, column_key)
+    _check_conflict(cell, expected_updated_at)
+    if bool(cell.unified) == unified:
+        return cell
+    now = _now()
+    _update_cell_if_unchanged(
+        session,
+        cell,
+        {"unified": unified, "updated_at": now, "updated_by": username},
+    )
+    workbook.updated_at = now
+    session.flush()
+    return cell
+
+
+def _saved_cell_status(session: Session, cell: Cell) -> str:
+    if not cell.value:
+        return "empty"
+    last_change = (
+        session.query(CellChange)
+        .filter(CellChange.cell_id == cell.id)
+        .order_by(CellChange.created_at.desc())
+        .first()
+    )
+    return "confirmed" if last_change and last_change.new_value == cell.value else "initial"
 
 
 def set_draft(
@@ -255,16 +471,16 @@ def set_draft(
     cell = get_or_create_cell(session, workbook, parameter_key, column_key)
     _ensure_editable(workbook, parameter_key, column_key, cell)
     _check_conflict(cell, expected_updated_at)
-    cell.draft_value = value
+    next_status = _saved_cell_status(session, cell) if (value or "") == (cell.value or "") else "draft"
+    updates = {
+        "draft_value": None if next_status != "draft" else value,
+        "status": next_status,
+        "updated_at": _now(),
+        "updated_by": username,
+    }
     if hyperlink is not None:
-        cell.hyperlink = hyperlink
-    if (value or "") == (cell.value or ""):
-        cell.draft_value = None
-        cell.status = "confirmed" if cell.value else "empty"
-    else:
-        cell.status = "draft"
-    cell.updated_at = _now()
-    cell.updated_by = username
+        updates["hyperlink"] = hyperlink
+    _update_cell_if_unchanged(session, cell, updates)
     workbook.updated_at = _now()
     session.flush()
     return cell
@@ -281,11 +497,14 @@ def confirm_cell(
     hyperlink: str | None = None,
     expected_updated_at: str | None = None,
     system: bool = False,
+    existing_cell: Cell | None = None,
 ) -> Cell:
     comment = (comment or "").strip()
     if not comment:
         raise ValueError("Комментарий обязателен")
-    cell = get_or_create_cell(session, workbook, parameter_key, column_key)
+    cell = existing_cell if existing_cell is not None else get_or_create_cell(
+        session, workbook, parameter_key, column_key
+    )
     if not system:
         _ensure_editable(workbook, parameter_key, column_key, cell)
         _check_conflict(cell, expected_updated_at)
@@ -294,11 +513,6 @@ def confirm_cell(
         raise ValueError("Нет значения для сохранения")
     old_value = cell.value
     previous_author = cell.updated_by
-    cell.value = new_value
-    cell.draft_value = None
-    cell.status = "confirmed" if not cell.locked or system else "confirmed"
-    if hyperlink is not None:
-        cell.hyperlink = hyperlink
     change = CellChange(
         id=_new_id(),
         cell_id=cell.id,
@@ -307,11 +521,27 @@ def confirm_cell(
         new_value=new_value,
         comment=comment,
     )
+    updates = {
+        "value": new_value,
+        "draft_value": None,
+        "status": "confirmed",
+        "updated_at": _now(),
+        "updated_by": username,
+    }
+    if hyperlink is not None:
+        updates["hyperlink"] = hyperlink
+    defer_flush = system and existing_cell is not None
+    _update_cell_if_unchanged(
+        session,
+        cell,
+        updates,
+        refresh=not defer_flush,
+        defer_flush=defer_flush,
+    )
     session.add(change)
-    cell.updated_at = _now()
-    cell.updated_by = username
     workbook.updated_at = _now()
-    session.flush()
+    if not defer_flush:
+        session.flush()
     cell.last_change_id = change.id
     if not system and previous_author and previous_author != username:
         add_notification(
@@ -327,6 +557,39 @@ def confirm_cell(
     return cell
 
 
+def add_cell_comment(
+    session: Session,
+    workbook: Workbook,
+    parameter_key: str,
+    column_key: str,
+    username: str,
+    comment: str,
+    expected_updated_at: str | None = None,
+) -> Cell:
+    comment = (comment or "").strip()
+    if not comment:
+        raise ValueError("Комментарий обязателен")
+    cell = get_or_create_cell(session, workbook, parameter_key, column_key)
+    _ensure_editable(workbook, parameter_key, column_key, cell, allow_unified=True)
+    _check_conflict(cell, expected_updated_at)
+    now = _now()
+    change = CellChange(
+        id=_new_id(),
+        cell_id=cell.id,
+        author=username,
+        old_value=cell.value,
+        new_value=cell.value,
+        comment=comment,
+    )
+    _update_cell_if_unchanged(session, cell, {"updated_at": now, "updated_by": username})
+    session.add(change)
+    workbook.updated_at = now
+    session.flush()
+    cell.last_change_id = change.id
+    session.flush()
+    return cell
+
+
 def restore_session(
     session: Session,
     workbook: Workbook,
@@ -335,10 +598,19 @@ def restore_session(
     extra_parameters: list | None = None,
     parameter_overrides: dict | None = None,
     deleted_parameters: list | None = None,
+    extra_columns: list | None = None,
+    column_overrides: dict | None = None,
+    deleted_columns: list[str] | None = None,
     remove_change_ids: list[str] | None = None,
     clear_keys: list[dict] | None = None,
     add_changes: list[dict] | None = None,
 ) -> Workbook:
+    if extra_columns is not None:
+        _save_json(workbook, "extra_columns_json", extra_columns)
+    if column_overrides is not None:
+        _save_json(workbook, "column_overrides_json", column_overrides)
+    if deleted_columns is not None:
+        _save_json(workbook, "deleted_columns_json", deleted_columns)
     if extra_parameters is not None:
         _save_json(workbook, "extra_parameters_json", extra_parameters)
     if parameter_overrides is not None:
@@ -347,6 +619,8 @@ def restore_session(
         _save_json(workbook, "deleted_parameters_json", deleted_parameters)
     for item in cells:
         cell = get_or_create_cell(session, workbook, item["parameter_key"], item["column_key"])
+        if cell.unified:
+            continue
         cell.value = item.get("value")
         cell.draft_value = item.get("draft_value")
         cell.status = item.get("status") or ("confirmed" if cell.value else "empty")
@@ -356,6 +630,8 @@ def restore_session(
         cell.updated_at = _now()
     for item in clear_keys or []:
         cell = get_or_create_cell(session, workbook, item["parameter_key"], item["column_key"])
+        if cell.unified:
+            continue
         cell.value = None
         cell.draft_value = None
         cell.status = "empty"
@@ -387,7 +663,7 @@ def restore_session(
 def discard_draft(session: Session, workbook: Workbook, parameter_key: str, column_key: str) -> Cell:
     cell = get_or_create_cell(session, workbook, parameter_key, column_key)
     cell.draft_value = None
-    cell.status = "confirmed" if cell.value else "empty"
+    cell.status = _saved_cell_status(session, cell)
     workbook.updated_at = _now()
     session.flush()
     return cell
@@ -428,12 +704,34 @@ def cell_history(session: Session, workbook: Workbook, parameter_key: str, colum
     return sorted(cell.changes, key=lambda item: item.created_at, reverse=True)
 
 
+def latest_cell_comment(
+    session: Session,
+    workbook: Workbook,
+    parameter_key: str,
+    column_key: str,
+) -> str | None:
+    row = (
+        session.query(CellChange.comment)
+        .join(Cell, Cell.id == CellChange.cell_id)
+        .filter(
+            Cell.workbook_id == workbook.id,
+            Cell.parameter_key == parameter_key,
+            Cell.column_key == column_key,
+            CellChange.comment != "",
+        )
+        .order_by(CellChange.created_at.desc())
+        .first()
+    )
+    return row[0] if row else None
+
+
 def create_version(
     session: Session,
     workbook: Workbook,
     username: str,
     kind: str,
     description: str = "",
+    snapshot: dict[str, dict[str, str | None]] | None = None,
 ) -> Version:
     version = Version(
         id=_new_id(),
@@ -441,7 +739,7 @@ def create_version(
         kind=kind,
         description=description,
         created_by=username,
-        snapshot_json=json.dumps(snapshot_cells(workbook), ensure_ascii=False),
+        snapshot_json=json.dumps(snapshot if snapshot is not None else snapshot_cells(workbook), ensure_ascii=False),
     )
     session.add(version)
     session.flush()
@@ -459,12 +757,17 @@ def create_version(
 
 def restore_version(session: Session, workbook: Workbook, version: Version) -> Workbook:
     snapshot = json.loads(version.snapshot_json)
+    active_columns = {item["key"] for item in workbook_columns(workbook)}
     existing = {(cell.parameter_key, cell.column_key): cell for cell in workbook.cells}
     for parameter_key, columns_map in snapshot.items():
         for column_key, value in columns_map.items():
+            if column_key not in active_columns:
+                continue
             cell = existing.get((parameter_key, column_key))
             if cell is None:
                 cell = get_or_create_cell(session, workbook, parameter_key, column_key)
+            if cell.unified:
+                continue
             cell.value = value
             cell.draft_value = None
             cell.status = "confirmed" if value else "empty"
@@ -474,14 +777,79 @@ def restore_version(session: Session, workbook: Workbook, version: Version) -> W
     return workbook
 
 
-def add_stage_column(session: Session, workbook: Workbook, label: str) -> dict:
+def add_stage_column(session: Session, workbook: Workbook, label: str, username: str = "") -> dict:
     current = extra_columns(workbook)
-    key = f"s_custom_{len(columns()) + len(current) + 1}"
-    item = {"key": key, "label": label.strip(), "kind": "stage", "order": len(columns()) + len(current)}
+    item = {
+        "key": f"s_custom_{uuid.uuid4().hex[:12]}",
+        "label": label.strip(),
+        "kind": "stage",
+        "order": len(columns()) + len(current),
+    }
     current.append(item)
-    workbook.extra_columns_json = json.dumps(current, ensure_ascii=False)
+    _save_json(workbook, "extra_columns_json", current)
     session.flush()
+    if username:
+        add_audit(
+            session,
+            actor=username,
+            action="column_added",
+            workbook=workbook,
+            column_key=item["key"],
+            new_value=item["label"],
+            summary=f"Добавлен столбец «{item['label']}»",
+        )
     return item
+
+
+def update_column_label(session: Session, workbook: Workbook, key: str, label: str, username: str) -> dict:
+    previous = next((item for item in workbook_columns(workbook) if item["key"] == key), None)
+    if previous is None:
+        raise ValueError("Столбец не найден")
+    cleaned_label = label.strip()
+    if not cleaned_label:
+        raise ValueError("Укажите наименование столбца")
+    overrides = column_overrides(workbook)
+    overrides[key] = cleaned_label
+    _save_json(workbook, "column_overrides_json", overrides)
+    session.flush()
+    add_audit(
+        session,
+        actor=username,
+        action="column_changed",
+        workbook=workbook,
+        column_key=key,
+        old_value=previous.get("label"),
+        new_value=cleaned_label,
+        summary=f"Столбец «{previous.get('label')}» → «{cleaned_label}»",
+    )
+    return {**previous, "label": cleaned_label}
+
+
+def delete_column(session: Session, workbook: Workbook, key: str, username: str) -> None:
+    previous = next((item for item in workbook_columns(workbook) if item["key"] == key), None)
+    if previous is None:
+        raise ValueError("Столбец не найден")
+    extras = extra_columns(workbook)
+    remaining_extras = [item for item in extras if item["key"] != key]
+    if len(remaining_extras) != len(extras):
+        _save_json(workbook, "extra_columns_json", remaining_extras)
+    else:
+        deleted = deleted_column_keys(workbook)
+        deleted.add(key)
+        _save_json(workbook, "deleted_columns_json", sorted(deleted))
+    overrides = column_overrides(workbook)
+    overrides.pop(key, None)
+    _save_json(workbook, "column_overrides_json", overrides)
+    session.flush()
+    add_audit(
+        session,
+        actor=username,
+        action="column_deleted",
+        workbook=workbook,
+        column_key=key,
+        old_value=previous.get("label"),
+        summary=f"Удалён столбец «{previous.get('label')}»",
+    )
 
 
 def add_parameter_row(
@@ -634,9 +1002,11 @@ def apply_imported_values(
             if column_key not in known_columns or value is None or str(value).strip() == "":
                 continue
             cell = get_or_create_cell(session, workbook, parameter_key, column_key)
+            if cell.unified:
+                continue
             cell.value = str(value).strip()
             cell.draft_value = None
-            cell.status = "confirmed"
+            cell.status = "initial"
             cell.updated_by = username
             cell.updated_at = _now()
             count += 1
@@ -671,7 +1041,7 @@ def apply_rules(session: Session, workbook: Workbook, parameter_key: str, column
             src = get_or_create_cell(session, workbook, item["from"], column_key)
             dst = get_or_create_cell(session, workbook, item["to"], column_key)
             copied = _display(src) or src.value
-            if copied and copied != dst.value:
+            if copied and copied != dst.value and not dst.unified:
                 dst.locked = False
                 confirm_cell(
                     session,
@@ -748,11 +1118,15 @@ def workbook_payload(session: Session, workbook: Workbook) -> dict:
             "external_id": obj.external_id,
             "status": obj.status,
             "has_workbook": True,
-            "workbook_id": workbook.id,
+            "workbook_id": (workbook.parent or workbook).id,
         },
         "created_at": workbook.created_at,
         "updated_at": workbook.updated_at,
         "created_by": workbook.created_by,
+        "parent_workbook_id": workbook.parent_workbook_id,
+        "sheet_name": workbook.sheet_name,
+        "sheet_order": workbook.sheet_order,
+        "is_primary": workbook.is_primary,
         "cells": [cell_to_dict(cell, workbook) for cell in workbook.cells],
         "unsaved_count": len(unsaved),
     }
@@ -768,6 +1142,9 @@ def catalog_payload(workbook: Workbook | None = None) -> dict:
     return {
         "columns": cols,
         "parameters": params,
+        "extra_columns": extra_columns(workbook) if workbook is not None else [],
+        "column_overrides": column_overrides(workbook) if workbook is not None else {},
+        "deleted_columns": sorted(deleted_column_keys(workbook)) if workbook is not None else [],
         "extra_parameters": extra_parameters(workbook) if workbook is not None else [],
         "parameter_overrides": parameter_overrides(workbook) if workbook is not None else {},
         "deleted_parameters": sorted(deleted_parameter_keys(workbook)) if workbook is not None else [],

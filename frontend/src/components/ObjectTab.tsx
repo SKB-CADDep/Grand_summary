@@ -1,5 +1,14 @@
-import { useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import type { ObjectItem, Workbook } from '../types'
+
+type NewObject = {
+  factory_number: string
+  turbine_name: string
+  station_name: string
+  station_number: string
+  series_turbines: string
+  kind: string
+}
 
 type Props = {
   objects: ObjectItem[]
@@ -8,12 +17,19 @@ type Props = {
   busy: boolean
   message: string
   onSelect: (objectId: string) => void
-  onCreate: (payload: { name: string; station: string; turbine: string; cylinder: string; external_id: string }) => void
-  onImportObjects: (file: File) => void
+  onCreate: (payload: NewObject) => void
+  onImportObjectParameters: (file: File) => void
   onImportTriangle: (file: File) => void
-  onAddStage: (label: string) => void
-  onSyncObjects: () => void
   canWrite: boolean
+}
+
+const emptyObject: NewObject = {
+  factory_number: '',
+  turbine_name: '',
+  station_name: '',
+  station_number: '',
+  series_turbines: '',
+  kind: '',
 }
 
 export function ObjectTab({
@@ -24,69 +40,75 @@ export function ObjectTab({
   message,
   onSelect,
   onCreate,
-  onImportObjects,
+  onImportObjectParameters,
   onImportTriangle,
-  onAddStage,
-  onSyncObjects,
   canWrite,
 }: Props) {
+  const objectParametersRef = useRef<HTMLInputElement>(null)
   const triangleRef = useRef<HTMLInputElement>(null)
-  const objectsRef = useRef<HTMLInputElement>(null)
-  const [name, setName] = useState('')
-  const [station, setStation] = useState('')
-  const [turbine, setTurbine] = useState('')
-  const [cylinder, setCylinder] = useState('ЦСД')
-  const [externalId, setExternalId] = useState('')
-  const [stageLabel, setStageLabel] = useState('')
+  const [search, setSearch] = useState('')
+  const [suggestionsOpen, setSuggestionsOpen] = useState(false)
+  const [draft, setDraft] = useState<NewObject>(emptyObject)
   const selected = objects.find((item) => item.id === selectedId)
+  const suggestions = useMemo(() => {
+    const query = search.trim().toLocaleLowerCase('ru')
+    if (!query || !suggestionsOpen) return []
+    return objects
+      .filter((item) => item.name.toLocaleLowerCase('ru').includes(query))
+      .slice(0, 30)
+  }, [objects, search, suggestionsOpen])
+  const createEnabled = Object.values(draft).every((value) => value.trim())
+
+  function updateDraft(field: keyof NewObject, value: string) {
+    setDraft((current) => ({ ...current, [field]: value }))
+  }
 
   return (
     <div className="tab-page">
       <div className="toolbar">
-        <label data-guide="guide-object">
+        <label className="object-search" data-guide="guide-object">
           Объект
-          <select
-            value={selectedId}
-            onChange={(event) => onSelect(event.target.value)}
+          <input
+            type="search"
+            role="combobox"
+            aria-autocomplete="list"
+            aria-expanded={suggestions.length > 0}
+            aria-controls="object-suggestions"
+            placeholder="Начните вводить название объекта"
+            value={search}
             disabled={busy}
-          >
-            <option value="">— выберите объект —</option>
-            {objects.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.name}
-                {item.has_workbook ? ' (есть сводка)' : ''}
-              </option>
-            ))}
-          </select>
+            onFocus={() => setSuggestionsOpen(true)}
+            onChange={(event) => {
+              setSearch(event.target.value)
+              setSuggestionsOpen(true)
+              if (selectedId) onSelect('')
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') setSuggestionsOpen(false)
+            }}
+          />
+          {suggestions.length > 0 ? (
+            <div className="object-suggestions" id="object-suggestions" role="listbox">
+              {suggestions.map((item) => (
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={item.id === selectedId}
+                  key={item.id}
+                  disabled={busy}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => {
+                    setSearch(item.name)
+                    setSuggestionsOpen(false)
+                    onSelect(item.id)
+                  }}
+                >
+                  {item.name}{item.has_workbook ? ' (есть сводка)' : ''}
+                </button>
+              ))}
+            </div>
+          ) : null}
         </label>
-        <button
-          type="button"
-          className="win-btn"
-          onClick={() => objectsRef.current?.click()}
-          disabled={busy || !canWrite}
-        >
-          Загрузить объекты из Excel
-        </button>
-        <button
-          type="button"
-          className="win-btn"
-          data-guide="guide-sync"
-          onClick={onSyncObjects}
-          disabled={busy || !canWrite}
-        >
-          Синхронизировать объекты
-        </button>
-        <input
-          ref={objectsRef}
-          type="file"
-          accept=".xlsx,.xlsm"
-          hidden
-          onChange={(event) => {
-            const file = event.target.files?.[0]
-            if (file) onImportObjects(file)
-            event.target.value = ''
-          }}
-        />
       </div>
 
       {selected?.has_workbook ? (
@@ -96,14 +118,33 @@ export function ObjectTab({
 
       {selected ? (
         <div className="hint">
-          Станция: {selected.station || '—'}; турбина: {selected.turbine || '—'}; цилиндр:{' '}
-          {selected.cylinder || '—'}; ID: {selected.external_id || '—'}
+          Станция: {selected.station || '—'}; турбина: {selected.turbine || '—'}; ID_projects:{' '}
+          {selected.external_id || '—'}
         </div>
       ) : (
         <div className="hint">Без выбранного объекта таблица ИД и отчёт недоступны.</div>
       )}
 
       <div className="toolbar">
+        <button
+          type="button"
+          className="win-btn"
+          disabled={!workbook || busy || !canWrite}
+          onClick={() => objectParametersRef.current?.click()}
+        >
+          Импортировать параметры объекта из Excel
+        </button>
+        <input
+          ref={objectParametersRef}
+          type="file"
+          accept=".xlsx"
+          hidden
+          onChange={(event) => {
+            const file = event.target.files?.[0]
+            if (file) onImportObjectParameters(file)
+            event.target.value = ''
+          }}
+        />
         <button
           type="button"
           className="win-btn"
@@ -124,52 +165,32 @@ export function ObjectTab({
             event.target.value = ''
           }}
         />
-        <input
-          type="text"
-          placeholder="Новая ступень"
-          value={stageLabel}
-          onChange={(event) => setStageLabel(event.target.value)}
-        />
-        <button
-          type="button"
-          className="win-btn"
-          disabled={!workbook || !stageLabel.trim() || busy || !canWrite}
-          onClick={() => {
-            onAddStage(stageLabel)
-            setStageLabel('')
-          }}
-        >
-          Добавить ступень
-        </button>
       </div>
 
-      <h3 style={{ margin: '8px 0 0' }}>Создать объект, если его нет в списке</h3>
+      <h3 style={{ margin: '8px 0 0' }}>Создать объект</h3>
       <div className="form-grid">
-        <span>Наименование</span>
-        <input value={name} onChange={(event) => setName(event.target.value)} />
-        <span>Станция</span>
-        <input value={station} onChange={(event) => setStation(event.target.value)} />
-        <span>Турбина</span>
-        <input value={turbine} onChange={(event) => setTurbine(event.target.value)} />
-        <span>Цилиндр</span>
-        <input value={cylinder} onChange={(event) => setCylinder(event.target.value)} />
-        <span>external_id</span>
-        <input value={externalId} onChange={(event) => setExternalId(event.target.value)} />
+        <span>Наименование станции</span>
+        <input value={draft.station_name} onChange={(event) => updateDraft('station_name', event.target.value)} />
+        <span>Номер станции</span>
+        <input value={draft.station_number} onChange={(event) => updateDraft('station_number', event.target.value)} />
+        <span>Наименование турбины</span>
+        <input value={draft.turbine_name} onChange={(event) => updateDraft('turbine_name', event.target.value)} />
+        <span>Заводской номер</span>
+        <input value={draft.factory_number} onChange={(event) => updateDraft('factory_number', event.target.value)} />
+        <span>Серия турбин</span>
+        <input value={draft.series_turbines} onChange={(event) => updateDraft('series_turbines', event.target.value)} />
+        <span>Тип объекта (kind)</span>
+        <input value={draft.kind} onChange={(event) => updateDraft('kind', event.target.value)} />
       </div>
       <div>
         <button
           type="button"
           className="win-btn"
-          disabled={!name.trim() || busy || !canWrite}
-          onClick={() =>
-            onCreate({
-              name: name.trim(),
-              station,
-              turbine,
-              cylinder,
-              external_id: externalId,
-            })
-          }
+          disabled={!createEnabled || busy || !canWrite}
+          onClick={() => {
+            onCreate(draft)
+            setDraft(emptyObject)
+          }}
         >
           Создать объект
         </button>

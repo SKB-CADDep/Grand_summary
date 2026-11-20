@@ -156,6 +156,34 @@ TEMPLATE_ROWS: list[tuple[int, str]] = [
 ]
 
 
+PARAMETER_LABEL_OVERRIDES = {
+    6: "Чертеж теоретического профиля (Профиль)",
+    7: "Угол установки профиля в корневом сечении (α'уст)",
+    8: "Синус эффективного угла выхода (sina1Э,)",
+    9: "Теоретическая выходная площадь (Fc,), мм2",
+    10: "Высота сопловой лопатки (L'), мм",
+    11: "Парциальность (e,)",
+    12: "Ширина профиля в рабочем положении (корневое сечение) (B'к), мм",
+    13: "Корневой диаметр СЛ (по выходной кромке) (D'к), мм",
+    14: "Средний диаметр СЛ (Д'ср,), мм",
+    15: "Количество СЛ (каналов при парциальной конструкции) (z')",
+    22: "Ширина тела (Толщина, диаф.), мм",
+    26: "Наружный диаметр обода (Диаметр обода, диаф.), мм",
+    35: "Диаметр ДУ (по бочке ротора) (D диаф.), мм",
+    36: "Количество дросселей ДУ (Zуп)",
+    43: "Чертеж теоретического профиля (Профиль)",
+    47: "Высота РЛ (L''), мм",
+    48: "Корневой диаметр РЛ (D''к), мм",
+    49: "Средний диаметр РЛ (Д''ср), мм",
+    50: "Количество РЛ (z'')",
+    51: "Синус эффективного угла выхода (sinb2,)",
+    52: "Теоретическая выходная площадь (Fр,), мм2",
+    60: "Тип (Профиль)",
+    61: "Чертеж профиля хвостовика (профиль)",
+    83: "Ширина обода диска (Толщина диска), мм",
+}
+
+
 def _column_key(label: str) -> str:
     text = label.strip()
     if text.endswith("ПКУ"):
@@ -214,7 +242,9 @@ def build_catalog() -> dict:
     for index, ((row, label), level) in enumerate(zip(TEMPLATE_ROWS, levels)):
         next_level = levels[index + 1] if index + 1 < len(levels) else level
         is_section = level == 0 or next_level > level
-        stripped = label.strip()
+        indent_prefix = label[: len(label) - len(label.lstrip())]
+        stripped = PARAMETER_LABEL_OVERRIDES.get(row, label.strip())
+        label_raw = f"{indent_prefix}{stripped}"
         if is_section:
             current_group = f"r{row:03d}"
             group_by_level[level] = current_group
@@ -227,11 +257,11 @@ def build_catalog() -> dict:
                 "key": f"r{row:03d}",
                 "excel_row": row,
                 "label": stripped,
-                "label_raw": label,
+                "label_raw": label_raw,
                 "group": current_group if not is_section else current_group,
                 "indent": level,
                 "row_kind": "section" if is_section else "editable",
-                "unit": None if is_section else _unit(label),
+                "unit": None if is_section else _unit(stripped),
                 "order": index,
             }
         )

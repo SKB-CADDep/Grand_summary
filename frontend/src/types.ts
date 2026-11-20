@@ -32,6 +32,9 @@ export type CatalogParameter = {
 export type Catalog = {
   columns: CatalogColumn[]
   parameters: CatalogParameter[]
+  extra_columns?: CatalogColumn[]
+  column_overrides?: Record<string, string>
+  deleted_columns?: string[]
   extra_parameters?: Record<string, unknown>[]
   parameter_overrides?: Record<string, unknown>
   deleted_parameters?: string[]
@@ -46,10 +49,18 @@ export type Cell = {
   hyperlink: string | null
   display: string | null
   locked?: boolean
+  unified?: boolean
   updated_at?: string | null
   updated_by?: string | null
   options?: string[]
   last_change_id?: string | null
+}
+
+export type WorkbookSheet = {
+  id: string
+  name: string
+  order: number
+  is_primary: boolean
 }
 
 export type Workbook = {
@@ -59,9 +70,36 @@ export type Workbook = {
   created_at: string
   updated_at: string
   created_by: string
+  parent_workbook_id: string | null
+  sheet_name: string
+  sheet_order: number
+  is_primary: boolean
   cells: Cell[]
   unsaved_count: number
   imported?: number
+}
+
+export type TriangleSheetData = {
+  key: 'geometry' | 'flow_path'
+  name: string
+  rows: string[][]
+  merged_ranges: Array<[number, number, number, number]>
+  parameter_mapping?: Record<string, string>
+  coordinate_mapping?: Record<string, string[]>
+}
+
+export type TriangleSourceCell = {
+  sheet_key: TriangleSheetData['key']
+  row: number
+  column: number
+}
+
+export type TriangleSyncResult = {
+  updated: number
+  cleared: number
+  skipped: number
+  unsupported_fields: string[]
+  conflicts: number
 }
 
 export type CellChange = {
@@ -101,6 +139,15 @@ export type PreviewTable = {
   title: string
   columns: CatalogColumn[]
   rows: { parameter_key: string; label: string; cells: PreviewCell[] }[]
+}
+
+export type ReportFields = {
+  memo_number: string
+  incoming_reference: string
+  document_id: string
+  narrative: string
+  subject: string
+  recipient_block: string
 }
 
 export type NotificationItem = {
@@ -148,4 +195,4 @@ export type ParameterWrite = {
   insert_after?: string
 }
 
-export type TabId = 'object' | 'table' | 'report'
+export type TabId = 'object' | 'triangles' | 'table' | 'report'

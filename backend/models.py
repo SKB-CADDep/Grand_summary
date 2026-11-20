@@ -35,14 +35,39 @@ class Workbook(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     created_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    parent_workbook_id: Mapped[str | None] = mapped_column(ForeignKey("workbooks.id"), nullable=True, index=True)
+    sheet_name: Mapped[str] = mapped_column(String(255), nullable=False, default="Исходные данные")
+    sheet_order: Mapped[int] = mapped_column(default=0)
+    is_primary: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     extra_columns_json: Mapped[str] = mapped_column(Text, default="[]")
+    column_overrides_json: Mapped[str] = mapped_column(Text, default="{}")
+    deleted_columns_json: Mapped[str] = mapped_column(Text, default="[]")
     extra_parameters_json: Mapped[str] = mapped_column(Text, default="[]")
     parameter_overrides_json: Mapped[str] = mapped_column(Text, default="{}")
     deleted_parameters_json: Mapped[str] = mapped_column(Text, default="[]")
 
     object: Mapped[ObjectItem] = relationship(back_populates="workbooks")
+    parent: Mapped["Workbook | None"] = relationship(remote_side="Workbook.id", back_populates="sheets")
+    sheets: Mapped[list["Workbook"]] = relationship(back_populates="parent", cascade="all, delete-orphan")
     cells: Mapped[list["Cell"]] = relationship(back_populates="workbook", cascade="all, delete-orphan")
     versions: Mapped[list["Version"]] = relationship(back_populates="workbook", cascade="all, delete-orphan")
+    triangle_sheets: Mapped[list["TriangleSheet"]] = relationship(
+        back_populates="workbook", cascade="all, delete-orphan"
+    )
+
+
+class TriangleSheet(Base):
+    __tablename__ = "triangle_sheets"
+    __table_args__ = (UniqueConstraint("workbook_id", "sheet_key", name="uq_triangle_sheet"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    workbook_id: Mapped[str] = mapped_column(ForeignKey("workbooks.id"), nullable=False, index=True)
+    sheet_key: Mapped[str] = mapped_column(String(32), nullable=False)
+    sheet_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    data_json: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+    workbook: Mapped[Workbook] = relationship(back_populates="triangle_sheets")
 
 
 class Cell(Base):
@@ -58,6 +83,7 @@ class Cell(Base):
     status: Mapped[str] = mapped_column(String(32), default="empty")
     hyperlink: Mapped[str | None] = mapped_column(Text, nullable=True)
     locked: Mapped[bool] = mapped_column(Boolean, default=False)
+    unified: Mapped[bool] = mapped_column(Boolean, default=False)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     updated_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
 

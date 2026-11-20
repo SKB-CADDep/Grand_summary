@@ -7,15 +7,19 @@ from backend.dependencies import get_db, get_username, require_reader
 from backend.schemas import (
     ChangelogResponse,
     HealthResponse,
+    HistoryPreferencesIn,
+    HistoryPreferencesOut,
     InstructionResponse,
     JournalItemOut,
     NotificationOut,
     UserResponse,
 )
+from src.app_info import APP_VERSION
 from src.paths import docs_dir
 from src.services import acl
 from src.services import guide as guide_service
 from src.services import journal as journal_service
+from src.services import user_preferences as preferences_service
 from src.services import workbooks as workbook_service
 
 router = APIRouter(tags=["Health"])
@@ -47,11 +51,31 @@ def mark_guide_seen(username: str = Depends(get_username)):
     )
 
 
+@router.get("/me/preferences", response_model=HistoryPreferencesOut)
+def get_preferences(username: str = Depends(get_username)):
+    preferences, configured = preferences_service.get_history_preferences(username)
+    return HistoryPreferencesOut(**preferences, configured=configured)
+
+
+@router.put("/me/preferences", response_model=HistoryPreferencesOut)
+def save_preferences(
+    body: HistoryPreferencesIn,
+    username: str = Depends(get_username),
+):
+    preferences = preferences_service.save_history_preferences(username, body.model_dump())
+    return HistoryPreferencesOut(**preferences, configured=True)
+
+
 @router.get("/changelog", response_model=ChangelogResponse)
 def changelog():
     path = docs_dir() / "changelog.md"
     text = path.read_text(encoding="utf-8") if path.is_file() else "Журнал изменений пока пуст."
-    return ChangelogResponse(text=text, releases=journal_service.parse_changelog(text))
+    text = text.replace("{{APP_VERSION}}", APP_VERSION)
+    return ChangelogResponse(
+        text=text,
+        app_version=APP_VERSION,
+        releases=journal_service.parse_changelog(text),
+    )
 
 
 @router.get("/journal", response_model=list[JournalItemOut])

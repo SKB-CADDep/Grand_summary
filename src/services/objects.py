@@ -1,147 +1,132 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
-from openpyxl import load_workbook
 from sqlalchemy.orm import Session
 
 from backend.models import ObjectItem, Workbook
-from src.paths import objects_seed_path
+from src.paths import objects_database_path
 
 
-def _new_id() -> str:
-    return str(uuid.uuid4())
+class ObjectCatalogError(ValueError):
+    pass
+
+
+def _text(value: Any) -> str:
+    return "" if value is None else str(value).strip()
+
+
+def _record_name(record: dict[str, Any]) -> str:
+    return (
+        f"{_text(record.get('station_name'))} (ст.{_text(record.get('station_number'))}) "
+        f"{_text(record.get('turbine_name'))} (зав.{_text(record.get('factory_number'))})"
+    )
+
+
+def read_object_catalog() -> list[dict[str, Any]]:
+    path = objects_database_path()
+    if not path.is_file():
+        raise ObjectCatalogError(f"Файл общего каталога объектов не найден: {path}")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ObjectCatalogError(f"Не удалось прочитать общий каталог объектов: {exc}") from exc
+    if not isinstance(payload, list):
+        raise ObjectCatalogError("Файл каталога объектов должен содержать JSON-массив.")
+    for record in payload:
+        if not isinstance(record, dict) or record.get("ID_projects") is None:
+            raise ObjectCatalogError("В каталоге найдена запись без ID_projects.")
+    return payload
+
+
+def _local_object(session: Session, record: dict[str, Any]) -> ObjectItem:
+    external_id = _text(record.get("ID_projects"))
+    item = session.query(ObjectItem).filter(ObjectItem.external_id == external_id).first()
+    if item is None:
+        item = ObjectItem(id=str(uuid.uuid4()), external_id=external_id, name=_record_name(record))
+        session.add(item)
+    item.name = _record_name(record)
+    item.station = _text(record.get("station_name")) or None
+    item.turbine = _text(record.get("turbine_name")) or None
+    item.cylinder = None
+    item.status = "active"
+    return item
 
 
 def list_objects(session: Session) -> list[ObjectItem]:
-    return session.query(ObjectItem).order_by(ObjectItem.name).all()
+    items = [_local_object(session, record) for record in read_object_catalog()]
+    session.flush()
+    return sorted(items, key=lambda item: item.name.casefold())
 
 
 def get_object(session: Session, object_id: str) -> ObjectItem | None:
     return session.get(ObjectItem, object_id)
 
 
+def _next_project_id(records: list[dict[str, Any]]) -> str:
+    ids = {_text(record.get("ID_projects")) for record in records}
+    numeric_ids = [int(value) for value in ids if value.isdecimal()]
+    candidate = max(numeric_ids, default=0) + 1
+    while str(candidate) in ids:
+        candidate += 1
+    return str(candidate)
+
+
+def _append_record(path: Path, records: list[dict[str, Any]], record: dict[str, Any]) -> None:
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f"{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as output:
+            json.dump([*records, record], output, ensure_ascii=False, indent=2)
+            output.write("\n")
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary_name, path)
+    except Exception:
+        Path(temporary_name).unlink(missing_ok=True)
+        raise
+
+
 def create_object(
     session: Session,
     *,
-    name: str,
-    station: str | None = None,
-    turbine: str | None = None,
-    cylinder: str | None = None,
-    external_id: str | None = None,
+    factory_number: str,
+    turbine_name: str,
+    station_name: str,
+    station_number: str,
+    series_turbines: str,
+    kind: str,
+    updated_by: str,
 ) -> ObjectItem:
-    item = ObjectItem(
-        id=_new_id(),
-        name=name.strip(),
-        station=station,
-        turbine=turbine,
-        cylinder=cylinder,
-        external_id=external_id,
-    )
-    session.add(item)
-    session.flush()
-    return item
+    path = objects_database_path()
+    records = read_object_catalog()
+    project_id = _next_project_id(records)
+    record = {
+        "ID_projects": project_id,
+        "factory_number": factory_number.strip(),
+        "turbine_name": turbine_name.strip(),
+        "station_name": station_name.strip(),
+        "station_number": station_number.strip(),
+        "series_turbines": series_turbines.strip(),
+        "kind": kind.strip(),
+        "hidden": False,
+        "object_version": 1,
+        "updated_by": updated_by,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _append_record(path, records, record)
+    return _local_object(session, record)
 
 
 def workbook_for_object(session: Session, object_id: str) -> Workbook | None:
     return (
         session.query(Workbook)
-        .filter(Workbook.object_id == object_id)
+        .filter(Workbook.object_id == object_id, Workbook.parent_workbook_id.is_(None))
         .order_by(Workbook.created_at.desc())
         .first()
     )
-
-
-def seed_objects_if_empty(session: Session) -> int:
-    if session.query(ObjectItem).count() > 0:
-        return 0
-    path = objects_seed_path()
-    if not path.is_file():
-        return 0
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    count = 0
-    for raw in payload:
-        create_object(
-            session,
-            name=raw["name"],
-            station=raw.get("station"),
-            turbine=raw.get("turbine"),
-            cylinder=raw.get("cylinder"),
-            external_id=raw.get("external_id"),
-        )
-        count += 1
-    return count
-
-
-def sync_objects_from_seed(session: Session) -> int:
-    """Заглушка будущей синхронизации по external_id (программа Паши / Task Tracker)."""
-    path = objects_seed_path()
-    if not path.is_file():
-        return 0
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    existing = {item.external_id: item for item in list_objects(session) if item.external_id}
-    added = 0
-    for raw in payload:
-        ext = raw.get("external_id")
-        if ext and ext in existing:
-            item = existing[ext]
-            item.name = raw["name"]
-            item.station = raw.get("station")
-            item.turbine = raw.get("turbine")
-            item.cylinder = raw.get("cylinder")
-            continue
-        create_object(
-            session,
-            name=raw["name"],
-            station=raw.get("station"),
-            turbine=raw.get("turbine"),
-            cylinder=raw.get("cylinder"),
-            external_id=ext,
-        )
-        added += 1
-    session.flush()
-    return added
-
-
-def import_objects_from_excel(session: Session, path: Path) -> int:
-    wb = load_workbook(path, data_only=True)
-    sheet = wb.active
-    headers = {}
-    first_row = next(sheet.iter_rows(min_row=1, max_row=1, values_only=True))
-    for index, value in enumerate(first_row):
-        if value is None:
-            continue
-        headers[str(value).strip().casefold()] = index
-
-    def col(*names: str) -> int | None:
-        for name in names:
-            if name in headers:
-                return headers[name]
-        return None
-
-    name_i = col("name", "имя", "наименование", "объект")
-    if name_i is None:
-        raise ValueError("В Excel нет колонки с именем объекта (name / наименование / объект)")
-
-    station_i = col("station", "станция", "электростанция")
-    turbine_i = col("turbine", "турбина")
-    cylinder_i = col("cylinder", "цилиндр", "цилиндр пч")
-    ext_i = col("external_id", "id", "код")
-
-    count = 0
-    for row in sheet.iter_rows(min_row=2, values_only=True):
-        name = row[name_i]
-        if not name:
-            continue
-        create_object(
-            session,
-            name=str(name).strip(),
-            station=str(row[station_i]).strip() if station_i is not None and row[station_i] else None,
-            turbine=str(row[turbine_i]).strip() if turbine_i is not None and row[turbine_i] else None,
-            cylinder=str(row[cylinder_i]).strip() if cylinder_i is not None and row[cylinder_i] else None,
-            external_id=str(row[ext_i]).strip() if ext_i is not None and row[ext_i] else None,
-        )
-        count += 1
-    return count

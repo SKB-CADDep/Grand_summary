@@ -22,6 +22,9 @@ export type ChangeSnap = {
 
 export type TableSnap = {
   cells: CellSnap[]
+  extra_columns: unknown[]
+  column_overrides: Record<string, string>
+  deleted_columns: string[]
   extra_parameters: unknown[]
   parameter_overrides: Record<string, unknown>
   deleted_parameters: string[]
@@ -58,6 +61,9 @@ export function snapCells(cells: Cell[]): CellSnap[] {
 export function takeSnap(workbook: Workbook | null, catalog: Catalog | null, extra?: Partial<TableSnap>): TableSnap {
   return {
     cells: snapCells(workbook?.cells || []),
+    extra_columns: catalog?.extra_columns || [],
+    column_overrides: catalog?.column_overrides || {},
+    deleted_columns: catalog?.deleted_columns || [],
     extra_parameters: catalog?.extra_parameters || [],
     parameter_overrides: catalog?.parameter_overrides || {},
     deleted_parameters: catalog?.deleted_parameters || [],

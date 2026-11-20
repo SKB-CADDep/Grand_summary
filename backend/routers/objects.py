@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from backend.dependencies import get_db, require_editor, require_reader
 from backend.schemas import ObjectCreate, ObjectOut, WorkbookOut
-from src.paths import data_dir
 from src.services import objects as object_service
 from src.services import workbooks as workbook_service
 
@@ -27,53 +26,41 @@ def _to_out(session: Session, item) -> ObjectOut:
     )
 
 
+def _catalog_error(exc: object) -> HTTPException:
+    return HTTPException(status_code=503, detail=f"Общий каталог объектов недоступен: {exc}")
+
+
 @router.get("/objects", response_model=list[ObjectOut])
 def list_objects(session: Session = Depends(get_db), _username: str = Depends(require_reader)):
-    object_service.seed_objects_if_empty(session)
-    return [_to_out(session, item) for item in object_service.list_objects(session)]
-
-
-@router.get("/objects/sync", response_model=list[ObjectOut])
-def sync_objects(session: Session = Depends(get_db), _username: str = Depends(require_editor)):
-    object_service.sync_objects_from_seed(session)
-    return [_to_out(session, item) for item in object_service.list_objects(session)]
+    try:
+        items = object_service.list_objects(session)
+    except object_service.ObjectCatalogError as exc:
+        raise _catalog_error(exc) from exc
+    return [_to_out(session, item) for item in items]
 
 
 @router.post("/objects", response_model=ObjectOut, status_code=201)
 def create_object(
     body: ObjectCreate,
     session: Session = Depends(get_db),
-    _username: str = Depends(require_editor),
+    username: str = Depends(require_editor),
 ):
-    item = object_service.create_object(
-        session,
-        name=body.name,
-        station=body.station,
-        turbine=body.turbine,
-        cylinder=body.cylinder,
-        external_id=body.external_id,
-    )
-    return _to_out(session, item)
-
-
-@router.post("/objects/import-excel", response_model=list[ObjectOut])
-def import_objects(
-    file: UploadFile,
-    session: Session = Depends(get_db),
-    _username: str = Depends(require_editor),
-):
-    suffix = (file.filename or "").lower()
-    if not suffix.endswith((".xlsx", ".xlsm")):
-        raise HTTPException(status_code=400, detail="Нужен файл .xlsx")
-    target = data_dir() / "_upload_objects.xlsx"
-    target.write_bytes(file.file.read())
     try:
-        object_service.import_objects_from_excel(session, target)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    finally:
-        target.unlink(missing_ok=True)
-    return [_to_out(session, item) for item in object_service.list_objects(session)]
+        item = object_service.create_object(
+            session,
+            factory_number=body.factory_number,
+            turbine_name=body.turbine_name,
+            station_name=body.station_name,
+            station_number=body.station_number,
+            series_turbines=body.series_turbines,
+            kind=body.kind,
+            updated_by=username,
+        )
+    except object_service.ObjectCatalogError as exc:
+        raise _catalog_error(exc) from exc
+    except OSError as exc:
+        raise _catalog_error(exc) from exc
+    return _to_out(session, item)
 
 
 @router.post("/objects/{object_id}/workbook", response_model=WorkbookOut)

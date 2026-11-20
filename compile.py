@@ -7,6 +7,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+from src.app_info import APP_NAME, APP_VERSION, LAUNCHER_EXE_NAME
+from src.services.updates import write_manifest
+
 PROJECT = Path(__file__).resolve().parent
 DIST = PROJECT / "dist"
 BUILD = PROJECT / "build"
@@ -44,6 +47,7 @@ HIDDEN = [
     "backend.main",
     "backend.routers.health",
     "backend.routers.objects",
+    "backend.routers.updates",
     "backend.routers.workbooks",
 ]
 
@@ -87,6 +91,11 @@ def main() -> None:
     for folder in (DIST, BUILD):
         if folder.exists():
             shutil.rmtree(folder, ignore_errors=True)
+    app_output = BUILD / "app-output"
+    app_work = BUILD / "app-work"
+    launcher_work = BUILD / "launcher-work"
+    app_output.mkdir(parents=True)
+    DIST.mkdir(parents=True)
 
     cmd = [
         sys.executable,
@@ -100,14 +109,16 @@ def main() -> None:
         NAME,
         "--paths",
         str(PROJECT),
+        "--distpath",
+        str(app_output),
+        "--workpath",
+        str(app_work),
         "--add-data",
         f"{FRONTEND_DIST}{SEP}frontend/dist",
         "--add-data",
         f"{PROJECT / 'templates'}{SEP}templates",
         "--add-data",
         f"{PROJECT / 'docs'}{SEP}docs",
-        "--add-data",
-        f"{PROJECT / 'data' / 'objects.json'}{SEP}data",
         "--add-data",
         f"{PROJECT / 'data' / 'acl.json'}{SEP}data",
         "--collect-all",
@@ -122,8 +133,39 @@ def main() -> None:
     cmd.append(str(ENTRY))
     run(cmd)
 
-    exe = DIST / NAME / f"{NAME}.exe"
-    print(f"[compile] готово: {exe}")
+    app_bundle = app_output / NAME
+    if not (app_bundle / f"{NAME}.exe").is_file():
+        raise SystemExit(f"Нет {app_bundle / f'{NAME}.exe'}")
+    release_bundle = DIST / "releases" / APP_VERSION / APP_NAME
+    release_bundle.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(app_bundle, release_bundle)
+
+    launcher_cmd = [
+        sys.executable,
+        "-m",
+        "PyInstaller",
+        "--noconfirm",
+        "--clean",
+        "--windowed",
+        "--onefile",
+        "--name",
+        LAUNCHER_EXE_NAME.removesuffix(".exe"),
+        "--paths",
+        str(PROJECT),
+        "--distpath",
+        str(DIST),
+        "--workpath",
+        str(launcher_work),
+        str(PROJECT / "desktop" / "launcher.py"),
+    ]
+    run(launcher_cmd)
+    launcher = DIST / LAUNCHER_EXE_NAME
+    if not launcher.is_file():
+        raise SystemExit(f"Нет {launcher}")
+    write_manifest(DIST, APP_VERSION)
+    print(f"[compile] релиз {APP_VERSION}: {release_bundle}")
+    print(f"[compile] лаунчер: {launcher}")
+    print("[compile] dist готов; на шару обновлений автоматически не копировалось.")
 
 
 if __name__ == "__main__":

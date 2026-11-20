@@ -5,6 +5,7 @@ from functools import lru_cache
 from typing import Any
 
 from src.paths import rules_path
+from src.services.materials import list_material_names
 
 
 @lru_cache(maxsize=1)
@@ -20,6 +21,8 @@ def options_for(parameter_key: str) -> list[str]:
     dict_id = (data.get("dictionary_for") or {}).get(parameter_key)
     if not dict_id:
         return []
+    if dict_id == "material":
+        return list_material_names()
     return list((data.get("dictionaries") or {}).get(dict_id) or [])
 
 

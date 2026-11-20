@@ -15,7 +15,12 @@ ACTION_LABELS = {
     "parameter_added": "Параметр добавлен",
     "parameter_changed": "Параметр изменён",
     "parameter_deleted": "Параметр удалён",
+    "column_added": "Столбец добавлен",
+    "column_changed": "Столбец изменён",
+    "column_deleted": "Столбец удалён",
     "imported": "Импорт",
+    "triangle_sync": "Синхронизация треугольников",
+    "project_saved": "Проект сохранён",
     "version": "Версия",
     "report": "Сводка",
 }

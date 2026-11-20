@@ -49,7 +49,11 @@ def _core_missing() -> list[str]:
 
     missing: list[str] = []
     for name in CORE_MODULES:
-        if importlib.util.find_spec(name) is None:
+        try:
+            module_spec = importlib.util.find_spec(name)
+        except ModuleNotFoundError:
+            module_spec = None
+        if module_spec is None:
             missing.append(name)
     return missing
 

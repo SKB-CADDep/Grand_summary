@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -34,22 +35,23 @@ def docs_dir() -> Path:
     return bundle_root() / "docs"
 
 
-def _seed_from_bundle(name: str) -> None:
-    dest_dir = project_root() / "data"
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    dest = dest_dir / name
-    if dest.is_file():
-        return
+def _seed_from_bundle(name: str, destination: Path) -> None:
+    dest = destination / name
     src = bundle_root() / "data" / name
-    if src.is_file() and src.resolve() != dest.resolve():
+    if not dest.is_file() and src.is_file():
         shutil.copy2(src, dest)
 
 
 def data_dir() -> Path:
-    path = project_root() / "data"
+    from src.app_info import DATA_DIR_ENV
+
+    configured = str(os.environ.get(DATA_DIR_ENV) or "").strip()
+    if configured:
+        path = Path(configured).expanduser()
+    else:
+        path = project_root() / "data"
     path.mkdir(parents=True, exist_ok=True)
-    _seed_from_bundle("objects.json")
-    _seed_from_bundle("acl.json")
+    _seed_from_bundle("acl.json", path)
     return path
 
 
@@ -61,8 +63,18 @@ def triangle_mapping_path() -> Path:
     return templates_dir() / "triangle_mapping.json"
 
 
-def objects_seed_path() -> Path:
-    return data_dir() / "objects.json"
+def objects_database_path() -> Path:
+    configured = str(os.environ.get("GRAND_SUMMARY_OBJECTS_FILE") or "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    return Path(r"\\Fileserver\утз\10 Служба технического директора\05 СКБт\!Общая\objects\projects.json")
+
+
+def materials_database_dir() -> Path:
+    configured = str(os.environ.get("GRAND_SUMMARY_MATERIALS_DIR") or "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    return Path(r"C:\Users\nyagavrilova\Desktop\Гранд СВОДКА (Grand_summer)\БД Материалов")
 
 
 def db_path() -> Path:

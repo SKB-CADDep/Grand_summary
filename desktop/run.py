@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import socket
 import sys
 import threading
@@ -12,6 +13,14 @@ HOST = "127.0.0.1"
 PREFERRED_PORT = 8765
 WINDOW_TITLE = "Гранд сводка ИД"
 _ROOT = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
+_API_SERVER = None
+_SHUTDOWN_REQUESTED = threading.Event()
+
+
+def request_shutdown() -> None:
+    _SHUTDOWN_REQUESTED.set()
+
+
 if str(_ROOT) not in sys.path and not getattr(sys, "frozen", False):
     sys.path.insert(0, str(_ROOT))
 
@@ -100,6 +109,7 @@ def _missing_dependency(exc: ModuleNotFoundError) -> None:
 
 
 def start_api(port: int) -> None:
+    global _API_SERVER
     try:
         import uvicorn
         from backend.main import app
@@ -108,15 +118,26 @@ def start_api(port: int) -> None:
 
     config = uvicorn.Config(app, host=HOST, port=port, log_level="warning", access_log=False)
     server = uvicorn.Server(config)
+    _API_SERVER = server
     server.install_signal_handlers = False
     thread = threading.Thread(target=server.run, name="grand-summary-api", daemon=True)
     thread.start()
     wait_until_ready(port)
 
 
+def _configure_webengine_rendering() -> None:
+    if sys.platform != "win32" or os.environ.get("GRAND_SUMMARY_ENABLE_WEBENGINE_GPU") == "1":
+        return
+
+    flags = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "").strip()
+    if "--disable-gpu" not in flags.split():
+        os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = f"{flags} --disable-gpu".strip()
+
+
 def open_window(port: int) -> None:
     try:
-        from PyQt6.QtCore import QSize, QUrl
+        from PyQt6.QtCore import QSize, QTimer, QUrl
+        from PyQt6.QtGui import QResizeEvent
         from PyQt6.QtWidgets import QApplication, QFileDialog, QMainWindow
         from PyQt6.QtWebEngineCore import QWebEngineDownloadRequest
         from PyQt6.QtWebEngineWidgets import QWebEngineView
@@ -132,7 +153,23 @@ def open_window(port: int) -> None:
             self.view = QWebEngineView(self)
             self.setCentralWidget(self.view)
             self.view.page().profile().downloadRequested.connect(self._on_download)
+            self._resize_refresh_timer = QTimer(self)
+            self._resize_refresh_timer.setSingleShot(True)
+            self._resize_refresh_timer.setInterval(140)
+            self._resize_refresh_timer.timeout.connect(self._refresh_viewport)
             self.view.load(QUrl(url))
+
+        def resizeEvent(self, event: QResizeEvent) -> None:
+            super().resizeEvent(event)
+            timer = getattr(self, "_resize_refresh_timer", None)
+            if timer is not None:
+                timer.start()
+
+        def _refresh_viewport(self) -> None:
+            self.view.update()
+            self.view.page().runJavaScript(
+                "window.dispatchEvent(new Event('resize'))"
+            )
 
         def _on_download(self, item: QWebEngineDownloadRequest) -> None:
             suggested = item.suggestedFileName() or "grand_summary.docx"
@@ -149,11 +186,36 @@ def open_window(port: int) -> None:
     qt_app.setApplicationName(WINDOW_TITLE)
     window = GrandSummaryWindow(f"http://{HOST}:{port}/")
     window.show()
+
+    def finish_update() -> None:
+        if not _SHUTDOWN_REQUESTED.is_set():
+            return
+        if _API_SERVER is not None:
+            _API_SERVER.should_exit = True
+        window.close()
+        qt_app.quit()
+
+    shutdown_timer = QTimer()
+    shutdown_timer.timeout.connect(finish_update)
+    shutdown_timer.start(100)
     sys.exit(qt_app.exec())
 
 
 def main() -> None:
-    if not getattr(sys, "frozen", False):
+    _SHUTDOWN_REQUESTED.clear()
+    _configure_webengine_rendering()
+    if getattr(sys, "frozen", False):
+        from src.app_info import local_app_root
+
+        local_data = local_app_root() / "data"
+        os.environ["GRAND_SUMMARY_DESKTOP"] = "1"
+        os.environ.setdefault("GRAND_SUMMARY_DATA_DIR", str(_ROOT / "data"))
+        os.environ.setdefault(
+            "GRAND_SUMMARY_USER_PREFERENCES", str(local_data / "user_preferences.json")
+        )
+        os.environ.setdefault("GRAND_SUMMARY_GUIDE", str(local_data / "guide_seen.json"))
+        os.environ["GRAND_SUMMARY_SQLITE_JOURNAL_MODE"] = "DELETE"
+    else:
         from src.bootstrap import ensure_environment
 
         ensure_environment(frontend=True, build_frontend=True)

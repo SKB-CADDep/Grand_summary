@@ -1,35 +1,84 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ApiError, api } from './api'
+import { ApiError, api, type HistoryPreferences } from './api'
 import { ChangelogViewer } from './components/ChangelogViewer'
 import { Dialog } from './components/Dialog'
 import { GuideChoice, GuideOverlay } from './components/Guide'
 import { ObjectTab } from './components/ObjectTab'
 import { ReportTab } from './components/ReportTab'
 import { TableTab } from './components/TableTab'
+import { TriangleTab } from './components/TriangleTab'
 import { UserJournal } from './components/UserJournal'
 import { GUIDE_SEEN_KEY, tourSteps, type GuideKind } from './guide'
 import { clearKeys, makeEntry, pushEntry, takeSnap, type HistoryEntry } from './sessionHistory'
 import type {
   Catalog,
+  Cell,
   CellChange,
   ChangelogRelease,
   JournalItem,
   NotificationItem,
   ObjectItem,
-  PreviewTable,
   TabId,
+  TriangleSheetData,
   UnsavedCell,
   VersionItem,
   Workbook,
+  WorkbookSheet,
 } from './types'
 
 type HelpKind = 'instruction' | 'about' | 'changelog' | 'unsaved' | 'notes' | 'user-journal' | null
+
+const HISTORY_POSITION_KEY = 'grand-summary.history.position'
+const HISTORY_PANEL_OPEN_KEY = 'grand-summary.history.panel-open'
+const HISTORY_SIZES_KEY = 'grand-summary.history.sizes'
+
+function boundedPreference(value: unknown, fallback: number, minimum: number, maximum: number) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback
+  return Math.max(minimum, Math.min(maximum, Math.round(value)))
+}
+
+function loadLocalHistoryPreferences(): HistoryPreferences {
+  let savedSizes: { right?: unknown; bottom?: unknown } = {}
+  try {
+    savedSizes = JSON.parse(localStorage.getItem(HISTORY_SIZES_KEY) || '{}') as typeof savedSizes
+  } catch {
+    savedSizes = {}
+  }
+  return {
+    history_position: localStorage.getItem(HISTORY_POSITION_KEY) === 'bottom' ? 'bottom' : 'right',
+    history_panel_open: localStorage.getItem(HISTORY_PANEL_OPEN_KEY) !== 'false',
+    history_right_width: boundedPreference(savedSizes.right, 360, 100, 760),
+    history_bottom_height: boundedPreference(savedSizes.bottom, 260, 140, 600),
+  }
+}
 
 function expectedAt(workbook: Workbook | null, parameterKey: string, columnKey: string) {
   const cell = workbook?.cells.find(
     (item) => item.parameter_key === parameterKey && item.column_key === columnKey,
   )
   return cell?.updated_at ?? null
+}
+
+function workbookWithCell(workbook: Workbook, updatedCell: Cell): Workbook {
+  const index = workbook.cells.findIndex(
+    (cell) =>
+      cell.parameter_key === updatedCell.parameter_key &&
+      cell.column_key === updatedCell.column_key,
+  )
+  const previousCell = index >= 0 ? workbook.cells[index] : null
+  const cells = [...workbook.cells]
+  if (index >= 0) cells[index] = updatedCell
+  else cells.push(updatedCell)
+
+  return {
+    ...workbook,
+    cells,
+    updated_at: updatedCell.updated_at || workbook.updated_at,
+    unsaved_count: Math.max(
+      0,
+      workbook.unsaved_count + Number(updatedCell.status === 'draft') - Number(previousCell?.status === 'draft'),
+    ),
+  }
 }
 
 export default function App() {
@@ -39,17 +88,24 @@ export default function App() {
   const [selectedId, setSelectedId] = useState('')
   const [workbook, setWorkbook] = useState<Workbook | null>(null)
   const [catalog, setCatalog] = useState<Catalog | null>(null)
+  const loadTargetCatalog = useCallback((sheetId: string) => api.catalog(sheetId), [])
+  const [sheetItems, setSheetItems] = useState<WorkbookSheet[]>([])
+  const [triangleSheets, setTriangleSheets] = useState<TriangleSheetData[]>([])
   const [tab, setTab] = useState<TabId>('object')
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
-  const [menuOpen, setMenuOpen] = useState<'file' | 'help' | 'notes' | null>(null)
+  const [menuOpen, setMenuOpen] = useState<'file' | 'view' | 'help' | 'notes' | null>(null)
+  const [historyPreferences, setHistoryPreferences] = useState(loadLocalHistoryPreferences)
+  const [historyPreferencesLoaded, setHistoryPreferencesLoaded] = useState(false)
+  const historyPosition = historyPreferences.history_position
+  const historyPanelOpen = historyPreferences.history_panel_open
   const [help, setHelp] = useState<HelpKind>(null)
   const [helpText, setHelpText] = useState('')
   const [history, setHistory] = useState<CellChange[]>([])
   const [unsaved, setUnsaved] = useState<UnsavedCell[]>([])
-  const [versions, setVersions] = useState<VersionItem[]>([])
-  const [tables, setTables] = useState<PreviewTable[]>([])
+  const [, setVersions] = useState<VersionItem[]>([])
+  const [reportTableData, setReportTableData] = useState<{ sheetId: string; catalog: Catalog; workbook: Workbook } | null>(null)
   const [pendingTab, setPendingTab] = useState<TabId | null>(null)
   const [unsavedComments, setUnsavedComments] = useState<Record<string, string>>({})
   const [notes, setNotes] = useState<NotificationItem[]>([])
@@ -62,45 +118,392 @@ export default function App() {
   const [redoStack, setRedoStack] = useState<HistoryEntry[]>([])
   const historyBusy = useRef(false)
   const workbookIdRef = useRef<string | null>(null)
+  const projectRevisionRef = useRef<string | null>(null)
+  const revisionPollInFlight = useRef(false)
+  const workbookLoadGenerationRef = useRef(0)
 
-  const refreshUnsaved = useCallback(async (workbookId: string) => {
-    setUnsaved(await api.unsaved(workbookId))
-  }, [])
+  useEffect(() => {
+    localStorage.setItem(HISTORY_POSITION_KEY, historyPreferences.history_position)
+    localStorage.setItem(HISTORY_PANEL_OPEN_KEY, String(historyPreferences.history_panel_open))
+    localStorage.setItem(
+      HISTORY_SIZES_KEY,
+      JSON.stringify({
+        right: historyPreferences.history_right_width,
+        bottom: historyPreferences.history_bottom_height,
+      }),
+    )
+  }, [historyPreferences])
+
+  useEffect(() => {
+    if (!historyPreferencesLoaded) return
+    const timeout = window.setTimeout(() => {
+      void api.saveHistoryPreferences(historyPreferences).catch((exc) => {
+        setError(exc instanceof Error ? exc.message : String(exc))
+      })
+    }, 150)
+    return () => window.clearTimeout(timeout)
+  }, [historyPreferences, historyPreferencesLoaded])
+
+  useEffect(() => {
+    if (!historyPreferencesLoaded) return
+    const saveBeforeClose = () => {
+      void api.saveHistoryPreferences(historyPreferences, true).catch(() => undefined)
+    }
+    window.addEventListener('pagehide', saveBeforeClose)
+    return () => window.removeEventListener('pagehide', saveBeforeClose)
+  }, [historyPreferences, historyPreferencesLoaded])
 
   const reloadWorkbook = useCallback(async (workbookId: string) => {
+    const generation = ++workbookLoadGenerationRef.current
+    const startingRevision = await api.workbookRevision(workbookId)
     const [next, nextCatalog, nextUnsaved] = await Promise.all([
       api.workbook(workbookId),
       api.catalog(workbookId),
       api.unsaved(workbookId),
     ])
+    if (generation !== workbookLoadGenerationRef.current) return
     setWorkbook(next)
     setCatalog(nextCatalog)
     setUnsaved(nextUnsaved)
+    projectRevisionRef.current = startingRevision.revision
   }, [])
 
   const loadWorkbook = useCallback(async (objectId: string) => {
+    const generation = ++workbookLoadGenerationRef.current
     setBusy(true)
     setError('')
     try {
       const opened = await api.openWorkbook(objectId)
-      const [nextCatalog, nextUnsaved, nextVersions] = await Promise.all([
-        api.catalog(opened.id),
-        api.unsaved(opened.id),
-        api.versions(opened.id),
+      const [startingRevision, nextSheets] = await Promise.all([
+        api.workbookRevision(opened.id),
+        api.sheets(opened.id),
       ])
-      setWorkbook(opened)
+      const activeWorkbookId = nextSheets[0]?.id ?? opened.id
+      const [currentWorkbook, nextCatalog, nextUnsaved, nextVersions, nextTriangles] =
+        await Promise.all([
+          api.workbook(activeWorkbookId),
+          api.catalog(activeWorkbookId),
+          api.unsaved(activeWorkbookId),
+          api.versions(activeWorkbookId),
+          api.triangles(opened.id),
+        ])
+      if (generation !== workbookLoadGenerationRef.current) return
+      setWorkbook(currentWorkbook)
       setCatalog(nextCatalog)
       setUnsaved(nextUnsaved)
       setVersions(nextVersions)
+      setSheetItems(nextSheets)
+      setTriangleSheets(nextTriangles)
+      projectRevisionRef.current = startingRevision.revision
       setObjects((prev) =>
         prev.map((item) => (item.id === objectId ? { ...item, workbook_id: opened.id } : item)),
+      )
+    } catch (exc) {
+      if (generation === workbookLoadGenerationRef.current) {
+        setError(exc instanceof Error ? exc.message : String(exc))
+      }
+    } finally {
+      if (generation === workbookLoadGenerationRef.current) setBusy(false)
+    }
+  }, [])
+
+  async function loadSheetData(sheetId: string) {
+    const generation = ++workbookLoadGenerationRef.current
+    const knownRootWorkbookId = workbook?.parent_workbook_id || workbook?.id
+    const [nextWorkbook, startingRevision] = await Promise.all([
+      api.workbook(sheetId),
+      knownRootWorkbookId ? api.workbookRevision(knownRootWorkbookId) : Promise.resolve(null),
+    ])
+    const rootWorkbookId = nextWorkbook.parent_workbook_id || nextWorkbook.id
+    const projectRevision = startingRevision || await api.workbookRevision(rootWorkbookId)
+    const [nextCatalog, nextUnsaved, nextVersions, nextSheets, nextTriangles] = await Promise.all([
+      api.catalog(nextWorkbook.id),
+      api.unsaved(nextWorkbook.id),
+      api.versions(nextWorkbook.id),
+      api.sheets(rootWorkbookId),
+      api.triangles(rootWorkbookId),
+    ])
+    if (generation !== workbookLoadGenerationRef.current) return
+    setWorkbook(nextWorkbook)
+    setCatalog(nextCatalog)
+    setUnsaved(nextUnsaved)
+    setVersions(nextVersions)
+    setSheetItems(nextSheets)
+    setTriangleSheets(nextTriangles)
+    projectRevisionRef.current = projectRevision.revision
+    setHistory([])
+    setUndoStack([])
+    setRedoStack([])
+  }
+
+  async function selectSheet(sheetId: string) {
+    if (unsaved.length > 0) {
+      setError('Сначала сохраните или отмените черновики текущего листа.')
+      return
+    }
+    setBusy(true)
+    setError('')
+    try {
+      await loadSheetData(sheetId)
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function copyCurrentSheet(sourceSheetId?: string) {
+    if (!workbook || !canWrite) return
+    const sourceId = sourceSheetId || workbook.id
+    const source = sheetItems.find((sheet) => sheet.id === sourceId)
+    if (!source) return
+    if (unsaved.length > 0) {
+      setError('Сначала сохраните или отмените черновики текущего листа.')
+      return
+    }
+    const name = window.prompt('Название нового листа', `${source.name} — копия`)
+    if (!name?.trim()) return
+    setBusy(true)
+    setError('')
+    try {
+      const copy = await api.copySheet(sourceId, name.trim())
+      await loadSheetData(copy.id)
+      setMessage(`Создан лист «${copy.sheet_name}» с копией структуры и значений.`)
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function renameSheetById(sheetId: string) {
+    if (!workbook || !canWrite) return
+    const target = sheetItems.find((sheet) => sheet.id === sheetId)
+    if (!target) return
+    const name = window.prompt('Новое название листа', target.name)
+    if (!name?.trim() || name.trim() === target.name) return
+    setBusy(true)
+    setError('')
+    try {
+      const rootWorkbookId = workbook.parent_workbook_id || workbook.id
+      const renamed = await api.renameSheet(rootWorkbookId, sheetId, name.trim())
+      const [nextSheets, revision] = await Promise.all([
+        api.sheets(rootWorkbookId),
+        api.workbookRevision(rootWorkbookId),
+      ])
+      if (workbook.id === sheetId) setWorkbook(renamed)
+      setSheetItems(nextSheets)
+      projectRevisionRef.current = revision.revision
+      setMessage(`Лист переименован в «${renamed.sheet_name}».`)
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function setPrimarySheet(sheetId: string) {
+    if (!workbook || !canWrite) return
+    const target = sheetItems.find((sheet) => sheet.id === sheetId)
+    if (!target || target.is_primary) return
+    const currentPrimary = sheetItems.find((sheet) => sheet.is_primary)
+    if (currentPrimary && !window.confirm(
+      `Основной лист сейчас «${currentPrimary.name}». Уверены, что хотите сделать лист «${target.name}» основным? Он будет перемещён в начало списка.`,
+    )) return
+
+    setBusy(true)
+    setError('')
+    try {
+      const rootWorkbookId = workbook.parent_workbook_id || workbook.id
+      const result = await api.setPrimarySheet(rootWorkbookId, sheetId)
+      const revision = await api.workbookRevision(rootWorkbookId)
+      setSheetItems(result.sheets)
+      setWorkbook((current) => current
+        ? { ...current, is_primary: result.sheets.find((sheet) => sheet.id === current.id)?.is_primary ?? current.is_primary }
+        : current)
+      projectRevisionRef.current = revision.revision
+      setMessage(`Лист «${target.name}» назначен основным и перемещён в начало.`)
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function unsetPrimarySheet(sheetId: string) {
+    if (!workbook || !canWrite) return
+    const target = sheetItems.find((sheet) => sheet.id === sheetId)
+    if (!target?.is_primary) return
+
+    setBusy(true)
+    setError('')
+    try {
+      const rootWorkbookId = workbook.parent_workbook_id || workbook.id
+      const result = await api.unsetPrimarySheet(rootWorkbookId, sheetId)
+      const revision = await api.workbookRevision(rootWorkbookId)
+      setSheetItems(result.sheets)
+      setWorkbook((current) => current
+        ? { ...current, is_primary: result.sheets.find((sheet) => sheet.id === current.id)?.is_primary ?? current.is_primary }
+        : current)
+      projectRevisionRef.current = revision.revision
+      setMessage(`С листа «${target.name}» снят статус основного.`)
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function deleteSheetById(sheetId: string) {
+    if (!workbook || !canWrite) return
+    const rootWorkbookId = workbook.parent_workbook_id || workbook.id
+    const target = sheetItems.find((sheet) => sheet.id === sheetId)
+    if (!target || sheetId === rootWorkbookId) return
+    if (sheetId === workbook.id && unsaved.length > 0) {
+      setError('Сначала сохраните или отмените черновики текущего листа.')
+      return
+    }
+    if (!window.confirm(`Удалить лист «${target.name}»?`)) return
+    setBusy(true)
+    setError('')
+    try {
+      const result = await api.deleteSheet(rootWorkbookId, sheetId)
+      setSheetItems(result.sheets)
+      if (workbook.id === sheetId) {
+        await loadSheetData(result.active_sheet_id)
+      } else {
+        const revision = await api.workbookRevision(rootWorkbookId)
+        projectRevisionRef.current = revision.revision
+      }
+      setMessage(`Лист «${target.name}» удалён.`)
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function composeReportFromCurrentSheet() {
+    if (!workbook) return
+    if (unsaved.length > 0) {
+      setError('Сначала сохраните или отмените черновики текущего листа.')
+      return
+    }
+    setReportTableData(null)
+    setTab('report')
+  }
+
+  async function importWorkingWorkbook(file: File) {
+    if (!selectedId || !canWrite) return
+    if (unsaved.length > 0) {
+      setError('Сначала сохраните или отмените черновики текущего листа.')
+      return
+    }
+    setBusy(true)
+    setError('')
+    try {
+      const rootWorkbook = await api.openWorkbook(selectedId)
+      const result = await api.importWorkbook(rootWorkbook.id, file)
+      await loadSheetData(result.active_sheet_id)
+      setMessage(`Импортировано листов: ${result.imported}.`)
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function saveCurrentProject() {
+    if (!workbook || !canWrite) return
+    setBusy(true)
+    setError('')
+    try {
+      const rootWorkbookId = workbook.parent_workbook_id || workbook.id
+      const result = await api.saveProject(rootWorkbookId)
+      setMessage(
+        `Проект сохранён: листов ${result.sheet_count}, ячеек ${result.cell_count}, черновиков ${result.draft_count}. Статусы оставлены без изменений.`,
       )
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc))
     } finally {
       setBusy(false)
     }
-  }, [])
+  }
+
+  async function exportWorkbookToExcel(scope: 'current' | 'all') {
+    if (!workbook) return
+    setBusy(true)
+    setError('')
+    try {
+      const blob = await api.exportExcel(workbook.id, scope)
+      const objectUrl = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      const projectName = (workbook.object.name || 'grand_summary').replace(/[\\/:*?"<>|]+/g, '_')
+      link.href = objectUrl
+      link.download = `${projectName}_${scope === 'all' ? 'all_sheets' : 'current_sheet'}.xlsx`
+      link.click()
+      URL.revokeObjectURL(objectUrl)
+      setMessage(scope === 'all' ? 'Выгружены листы проекта и проверки.' : 'Текущий лист выгружен в Excel.')
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function exportReportTableToWord(
+    sheetId: string,
+    parameterKeys: string[],
+    columnKeys: string[],
+    tableNumber: number,
+  ) {
+    setBusy(true)
+    setError('')
+    try {
+      const blob = await api.exportReportTableDocx(sheetId, parameterKeys, columnKeys, tableNumber)
+      const objectUrl = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      const projectName = (workbook?.object.name || 'grand_summary').replace(/[\\/:*?"<>|]+/g, '_')
+      link.href = objectUrl
+      link.download = `${projectName}_таблица_${tableNumber}.docx`
+      link.click()
+      URL.revokeObjectURL(objectUrl)
+      setMessage(`Таблица ${tableNumber} выгружена в Word.`)
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function refreshApplication() {
+    setMenuOpen(null)
+    setError('')
+    setBusy(true)
+    try {
+      const status = await api.updateStatus()
+      if (!status.supported) {
+        window.location.reload()
+        return
+      }
+      if (!status.enabled) {
+        setMessage(status.message || 'Источник обновлений не настроен.')
+        return
+      }
+      if (!status.update_available) {
+        setMessage(`Установлена последняя версия (${status.current_version}).`)
+        return
+      }
+      const latest = status.latest_version || 'новая версия'
+      if (!window.confirm(`Доступна версия ${latest}. Обновить и перезапустить приложение?`)) return
+      const result = await api.applyUpdate()
+      setMessage(`Обновление до версии ${result.version} запущено. Приложение перезапустится.`)
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc))
+    } finally {
+      setBusy(false)
+    }
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -111,6 +514,21 @@ export default function App() {
         if (cancelled) return
         setUsername(data.username)
         setCanWrite(data.can_write)
+        try {
+          const preferences = await api.historyPreferences()
+          if (cancelled) return
+          if (preferences.configured) {
+            setHistoryPreferences({
+              history_position: preferences.history_position,
+              history_panel_open: preferences.history_panel_open,
+              history_right_width: preferences.history_right_width,
+              history_bottom_height: preferences.history_bottom_height,
+            })
+          }
+          setHistoryPreferencesLoaded(true)
+        } catch {
+          if (!cancelled) setHistoryPreferencesLoaded(true)
+        }
         const localSeen = localStorage.getItem(GUIDE_SEEN_KEY) === '1'
         if (data.guide_seen || localSeen) {
           localStorage.setItem(GUIDE_SEEN_KEY, '1')
@@ -161,6 +579,49 @@ export default function App() {
   }, [])
 
   useEffect(() => {
+    if (!workbook || busy) return
+    const pollProject = async () => {
+      if (revisionPollInFlight.current || document.visibilityState !== 'visible') return
+      const generation = workbookLoadGenerationRef.current
+      revisionPollInFlight.current = true
+      try {
+        const { revision } = await api.workbookRevision(workbook.id)
+        if (
+          generation !== workbookLoadGenerationRef.current ||
+          workbook.id !== workbookIdRef.current
+        ) return
+        if (!projectRevisionRef.current) {
+          projectRevisionRef.current = revision
+          return
+        }
+        if (revision === projectRevisionRef.current) return
+        const activeElement = document.activeElement
+        if (
+          activeElement instanceof HTMLElement &&
+          activeElement.matches('.sheet input.cell-edit, .side-fixed input[placeholder^="Ссылка"]')
+        ) {
+          return
+        }
+        try {
+          await loadSheetData(workbook.id)
+        } catch (exc) {
+          if (!(exc instanceof ApiError) || exc.status !== 404 || !workbook.parent_workbook_id) {
+            throw exc
+          }
+          await loadSheetData(workbook.parent_workbook_id)
+        }
+      } catch {
+        // Retry on the next polling interval; temporary network errors must not interrupt editing.
+      } finally {
+        revisionPollInFlight.current = false
+      }
+    }
+    void pollProject()
+    const timer = window.setInterval(() => void pollProject(), 10000)
+    return () => window.clearInterval(timer)
+  }, [workbook?.id, workbook?.parent_workbook_id, busy])
+
+  useEffect(() => {
     if (help !== 'unsaved' || unsaved.length > 0) return
     setHelp(null)
     if (pendingTab) {
@@ -172,9 +633,13 @@ export default function App() {
   async function selectObject(objectId: string) {
     setSelectedId(objectId)
     setMessage('')
+    setTab('object')
     if (!objectId) {
       setWorkbook(null)
       setCatalog(null)
+      setSheetItems([])
+      setTriangleSheets([])
+      setUnsaved([])
       return
     }
     await loadWorkbook(objectId)
@@ -202,8 +667,9 @@ export default function App() {
     }
     if (kind === 'user-journal') setJournalItems(await api.journal())
     if (kind === 'about') {
+      const data = await api.changelog()
       setHelpText(
-        `Гранд сводка ИД 0.2.6\nПользователь: ${username}\nПрава: ${canWrite ? 'ОР (запись)' : 'просмотр'}\nСистема управления исходными данными проточных частей турбин.`,
+        `Гранд сводка ИД ${data.app_version}\nПользователь: ${username}\nПрава: ${canWrite ? 'ОР (запись)' : 'просмотр'}\nСистема управления исходными данными проточных частей турбин.`,
       )
     }
   }
@@ -224,10 +690,14 @@ export default function App() {
     nextWorkbook: Workbook,
     extra?: { changeIds?: string[]; changes?: HistoryEntry['after']['changes'] },
   ) {
-    const nextCatalog = await api.catalog(nextWorkbook.id)
+    const cellOnlyChange = kind === 'draft' || kind === 'confirm' || kind === 'discard'
+    const [nextCatalog, nextUnsaved] = await Promise.all([
+      cellOnlyChange ? Promise.resolve(previousCatalog) : api.catalog(nextWorkbook.id),
+      api.unsaved(nextWorkbook.id),
+    ])
     setWorkbook(nextWorkbook)
-    setCatalog(nextCatalog)
-    setUnsaved(await api.unsaved(nextWorkbook.id))
+    if (nextCatalog !== previousCatalog) setCatalog(nextCatalog)
+    setUnsaved(nextUnsaved)
     if (historyBusy.current) return nextCatalog
     const before = takeSnap(previousWorkbook, previousCatalog)
     const after = takeSnap(nextWorkbook, nextCatalog, extra)
@@ -244,6 +714,9 @@ export default function App() {
     try {
       const next = await api.restoreSession(workbook.id, {
         cells: target.cells,
+        extra_columns: target.extra_columns,
+        column_overrides: target.column_overrides,
+        deleted_columns: target.deleted_columns,
         extra_parameters: target.extra_parameters,
         parameter_overrides: target.parameter_overrides,
         deleted_parameters: target.deleted_parameters,
@@ -364,8 +837,61 @@ export default function App() {
           </button>
           {menuOpen === 'file' ? (
             <div className="menu-drop">
-              <button type="button" onClick={() => window.location.reload()}>
+              <button type="button" disabled={busy} onClick={() => void refreshApplication()}>
                 Обновить
+              </button>
+            </div>
+          ) : null}
+        </div>
+        <div className={`menu ${menuOpen === 'view' ? 'open' : ''}`}>
+          <button
+            type="button"
+            className="menu-btn"
+            aria-haspopup="menu"
+            aria-expanded={menuOpen === 'view'}
+            onClick={(event) => {
+              event.stopPropagation()
+              setMenuOpen(menuOpen === 'view' ? null : 'view')
+            }}
+          >
+            Представление
+          </button>
+          {menuOpen === 'view' ? (
+            <div className="menu-drop" role="menu" aria-label="Представление">
+              <strong className="menu-section-title">История изменений</strong>
+              <button
+                type="button"
+                role="menuitemcheckbox"
+                aria-checked={historyPanelOpen}
+                onClick={() =>
+                  setHistoryPreferences((current) => ({
+                    ...current,
+                    history_panel_open: !current.history_panel_open,
+                  }))
+                }
+              >
+                {historyPanelOpen ? 'Скрыть панель истории' : 'Показать панель истории'}
+              </button>
+              <strong className="menu-section-title">Расположение панели</strong>
+              <button
+                type="button"
+                role="menuitemradio"
+                aria-checked={historyPosition === 'right'}
+                onClick={() =>
+                  setHistoryPreferences((current) => ({ ...current, history_position: 'right' }))
+                }
+              >
+                {historyPosition === 'right' ? '✓ Справа' : 'Справа'}
+              </button>
+              <button
+                type="button"
+                role="menuitemradio"
+                aria-checked={historyPosition === 'bottom'}
+                onClick={() =>
+                  setHistoryPreferences((current) => ({ ...current, history_position: 'bottom' }))
+                }
+              >
+                {historyPosition === 'bottom' ? '✓ Снизу' : 'Снизу'}
               </button>
             </div>
           ) : null}
@@ -500,6 +1026,16 @@ export default function App() {
           >
             Таблица ИД
           </button>
+          {triangleSheets.length > 0 ? (
+            <button
+              type="button"
+              className={`tab ${tab === 'triangles' ? 'active' : ''}`}
+              disabled={!workbook}
+              onClick={() => tryChangeTab('triangles')}
+            >
+              Треугольники
+            </button>
+          ) : null}
           <button
             type="button"
             className={`tab ${tab === 'report' ? 'active' : ''}`}
@@ -520,70 +1056,169 @@ export default function App() {
             message=""
             canWrite={canWrite}
             onSelect={selectObject}
-            onSyncObjects={async () => {
-              setObjects(await api.syncObjects())
-              setMessage('Объекты синхронизированы из каталога')
-            }}
             onCreate={async (payload) => {
               setBusy(true)
               try {
                 const created = await api.createObject(payload)
-                const list = await api.objects()
-                setObjects(list)
+                setObjects(await api.objects())
                 await selectObject(created.id)
-                setMessage('Объект создан')
+                setMessage('Объект добавлен в общий каталог')
               } catch (exc) {
                 setError(exc instanceof Error ? exc.message : String(exc))
               } finally {
                 setBusy(false)
               }
             }}
-            onImportObjects={async (file) => {
-              setBusy(true)
-              try {
-                setObjects(await api.importObjects(file))
-                setMessage('Список объектов обновлён')
-              } catch (exc) {
-                setError(exc instanceof Error ? exc.message : String(exc))
-              } finally {
-                setBusy(false)
-              }
-            }}
+            onImportObjectParameters={(file) => void importWorkingWorkbook(file)}
             onImportTriangle={async (file) => {
               if (!workbook) return
               setBusy(true)
+              setError('')
               try {
-                const next = await api.importTriangle(workbook.id, file)
-                setWorkbook(next)
-                setMessage(`Импортировано значений: ${next.imported ?? 0}. Создана версия 0.`)
-                setVersions(await api.versions(next.id))
-                await refreshUnsaved(next.id)
+                const rootWorkbookId = workbook.parent_workbook_id || workbook.id
+                const result = await api.importTriangle(rootWorkbookId, file)
+                setTriangleSheets(result.sheets)
+                setTab('triangles')
+                setMessage('Импортированы листы «Геом. данные» и «Проточная часть».')
               } catch (exc) {
                 setError(exc instanceof Error ? exc.message : String(exc))
               } finally {
                 setBusy(false)
               }
             }}
-            onAddStage={async (label) => {
-              if (!workbook) return
-              await api.addStage(workbook.id, label)
-              setCatalog(await api.catalog(workbook.id))
-              setMessage(`Добавлена ступень ${label}`)
+          />
+        ) : null}
+
+        {tab === 'triangles' ? (
+          <TriangleTab
+            sheets={triangleSheets}
+            targetSheets={sheetItems}
+            canWrite={canWrite}
+            busy={busy}
+            onLoadCatalog={loadTargetCatalog}
+            onSync={async (targetSheetId, mode, cells, targetParameterKey) => {
+              if (!workbook || !canWrite) return
+              if (
+                mode === 'all' &&
+                !window.confirm(
+                  'Все сопоставимые параметры треугольников заменят соответствующие значения в выбранном листе ИД. Продолжить?',
+                )
+              ) return
+              setBusy(true)
+              setError('')
+              try {
+                const pending = await api.unsaved(targetSheetId)
+                if (pending.length) {
+                  setError('Сначала сохраните или отмените черновики на выбранном листе ИД.')
+                  return
+                }
+                const result = await api.syncTriangles(targetSheetId, {
+                  mode,
+                  cells,
+                  target_parameter_key: targetParameterKey,
+                })
+                await loadSheetData(targetSheetId)
+                setTab('table')
+                const unsupported = result.unsupported_fields.length
+                  ? ` Не перенесены поля без однозначного соответствия: ${result.unsupported_fields.join(', ')}.`
+                  : ''
+                setMessage(
+                  `Треугольники синхронизированы: записано ${result.updated}, очищено ${result.cleared}, пропущено ${result.skipped + result.conflicts}.${unsupported}`,
+                )
+              } catch (exc) {
+                setError(exc instanceof Error ? exc.message : String(exc))
+              } finally {
+                setBusy(false)
+              }
             }}
           />
         ) : null}
 
         {tab === 'table' ? (
           <TableTab
+            objectName={objects.find((item) => item.id === selectedId)?.name ?? ''}
             catalog={catalog}
             workbook={workbook}
             unsaved={unsaved}
             history={history}
+            sheets={sheetItems}
             busy={busy}
             canWrite={canWrite}
+            historyPosition={historyPosition}
+            historyPanelOpen={historyPanelOpen}
+            onShowHistory={() =>
+              setHistoryPreferences((current) => ({ ...current, history_panel_open: true }))
+            }
+            onHideHistory={() =>
+              setHistoryPreferences((current) => ({ ...current, history_panel_open: false }))
+            }
+            onSaveAllDrafts={() => {
+              setUnsavedComments({})
+              setHelp('unsaved')
+            }}
+            historySizes={{
+              right: historyPreferences.history_right_width,
+              bottom: historyPreferences.history_bottom_height,
+            }}
+            onHistorySizeChange={(position, size) =>
+              setHistoryPreferences((current) => ({
+                ...current,
+                [position === 'right' ? 'history_right_width' : 'history_bottom_height']: size,
+              }))
+            }
+            onSelectSheet={(sheetId) => void selectSheet(sheetId)}
+            onCopySheet={(sheetId) => void copyCurrentSheet(sheetId)}
+            onRenameSheet={(sheetId) => void renameSheetById(sheetId)}
+            onSetPrimarySheet={(sheetId) => void setPrimarySheet(sheetId)}
+            onUnsetPrimarySheet={(sheetId) => void unsetPrimarySheet(sheetId)}
+            onDeleteSheet={(sheetId) => void deleteSheetById(sheetId)}
+            onImportWorkbook={(file) => void importWorkingWorkbook(file)}
+            onExportCurrent={() => void exportWorkbookToExcel('current')}
+            onExportAll={() => void exportWorkbookToExcel('all')}
+            onComposeReport={() => void composeReportFromCurrentSheet()}
+            onSaveProject={saveCurrentProject}
             onSelectCell={async (selection) => {
               if (!workbook) return
               setHistory(await api.history(workbook.id, selection.parameterKey, selection.columnKey))
+            }}
+            onLoadCellComment={(parameterKey, columnKey) =>
+              workbook ? api.lastCellComment(workbook.id, parameterKey, columnKey) : Promise.resolve(null)
+            }
+            onAddComment={async (parameterKey, columnKey, comment) => {
+              if (!workbook || !canWrite) return false
+              try {
+                await api.addCellComment(workbook.id, parameterKey, columnKey, {
+                  comment,
+                  expected_updated_at: expectedAt(workbook, parameterKey, columnKey),
+                })
+                const [nextWorkbook, nextHistory] = await Promise.all([
+                  api.workbook(workbook.id),
+                  api.history(workbook.id, parameterKey, columnKey),
+                ])
+                setWorkbook(nextWorkbook)
+                setHistory(nextHistory)
+                setMessage('Комментарий добавлен в историю ячейки.')
+                return true
+              } catch (exc) {
+                await handleWriteError(exc)
+                return false
+              }
+            }}
+            onToggleUnification={async (parameterKey, columnKey, unified) => {
+              if (!workbook) return
+              setBusy(true)
+              try {
+                await api.setCellUnification(workbook.id, parameterKey, columnKey, {
+                  unified,
+                  expected_updated_at: expectedAt(workbook, parameterKey, columnKey),
+                })
+                setWorkbook(await api.workbook(workbook.id))
+                setMessage(unified ? 'Ячейка отмечена как унифицированная.' : 'Унификация ячейки снята.')
+              } catch (exc) {
+                await handleWriteError(exc)
+              } finally {
+                setBusy(false)
+              }
             }}
             onAddParameter={async (body) => {
               if (!workbook) return
@@ -609,12 +1244,36 @@ export default function App() {
               const next = await api.workbook(workbook.id)
               await recordHistory(previous, previousCatalog, 'Удаление параметра', 'structure', { parameterKey: key }, next)
             }}
+            onAddColumn={async (label) => {
+              if (!workbook) return
+              const previous = workbook
+              const previousCatalog = catalog
+              await api.addStage(workbook.id, label)
+              const next = await api.workbook(workbook.id)
+              await recordHistory(previous, previousCatalog, 'Добавление столбца', 'structure', {}, next)
+            }}
+            onUpdateColumn={async (key, label) => {
+              if (!workbook) return
+              const previous = workbook
+              const previousCatalog = catalog
+              await api.updateColumn(workbook.id, key, label)
+              const next = await api.workbook(workbook.id)
+              await recordHistory(previous, previousCatalog, 'Переименование столбца', 'structure', { columnKey: key }, next)
+            }}
+            onDeleteColumn={async (key) => {
+              if (!workbook) return
+              const previous = workbook
+              const previousCatalog = catalog
+              await api.deleteColumn(workbook.id, key)
+              const next = await api.workbook(workbook.id)
+              await recordHistory(previous, previousCatalog, 'Удаление столбца', 'structure', { columnKey: key }, next)
+            }}
             onDiscard={async (parameterKey, columnKey) => {
               if (!workbook) return
               const previous = workbook
               const previousCatalog = catalog
-              await api.discardCell(workbook.id, parameterKey, columnKey)
-              const next = await api.workbook(workbook.id)
+              const updatedCell = await api.discardCell(workbook.id, parameterKey, columnKey)
+              const next = workbookWithCell(previous, updatedCell)
               await recordHistory(
                 previous,
                 previousCatalog,
@@ -625,16 +1284,16 @@ export default function App() {
               )
             }}
             onDraft={async (parameterKey, columnKey, value, hyperlink) => {
-              if (!workbook) return
+              if (!workbook) return false
               try {
                 const previous = workbook
                 const previousCatalog = catalog
-                await api.patchCell(workbook.id, parameterKey, columnKey, {
+                const updatedCell = await api.patchCell(workbook.id, parameterKey, columnKey, {
                   value,
                   hyperlink,
                   expected_updated_at: expectedAt(workbook, parameterKey, columnKey),
                 })
-                const next = await api.workbook(workbook.id)
+                const next = workbookWithCell(previous, updatedCell)
                 await recordHistory(
                   previous,
                   previousCatalog,
@@ -643,12 +1302,14 @@ export default function App() {
                   { parameterKey, columnKey },
                   next,
                 )
+                return true
               } catch (exc) {
                 await handleWriteError(exc)
+                return false
               }
             }}
             onConfirm={async (parameterKey, columnKey, value, comment, hyperlink) => {
-              if (!workbook) return
+              if (!workbook) return false
               try {
                 const previous = workbook
                 const previousCatalog = catalog
@@ -658,7 +1319,7 @@ export default function App() {
                   hyperlink,
                   expected_updated_at: expectedAt(workbook, parameterKey, columnKey),
                 })
-                const next = await api.workbook(workbook.id)
+                const next = workbookWithCell(previous, cell)
                 const log = await api.history(workbook.id, parameterKey, columnKey)
                 setHistory(log)
                 const last = log[0]
@@ -686,8 +1347,10 @@ export default function App() {
                       : [],
                   },
                 )
+                return true
               } catch (exc) {
                 await handleWriteError(exc)
+                return false
               }
             }}
           />
@@ -696,38 +1359,24 @@ export default function App() {
         {tab === 'report' ? (
           <ReportTab
             workbook={workbook}
-            versions={versions}
-            tables={tables}
+            sheets={sheetItems}
+            idTableData={reportTableData}
             busy={busy}
-            canWrite={canWrite}
-            onPreview={async (type, versionId) => {
-              if (!workbook) return
-              const preview = await api.reportPreview(workbook.id, type, versionId || null)
-              setTables(preview.tables)
-            }}
-            onCreate={async (type, versionId, extraNotes) => {
-              if (!workbook) return
-              const blob = await api.createReport(workbook.id, type, versionId || null, extraNotes)
-              const url = URL.createObjectURL(blob)
-              const link = document.createElement('a')
-              link.href = url
-              link.download = `grand_summary_${type}.docx`
-              link.click()
-              URL.revokeObjectURL(url)
-              setVersions(await api.versions(workbook.id))
-              setMessage('Сводка сохранена, создан снимок версии')
-            }}
-            onRestore={async (versionId) => {
-              if (!workbook) return
-              const next = await api.restoreVersion(workbook.id, versionId)
-              setWorkbook(next)
-              setMessage('Загружена выбранная версия')
-            }}
-            onIssue={async (description) => {
-              if (!workbook) return
-              await api.createVersion(workbook.id, 'issued', description)
-              setVersions(await api.versions(workbook.id))
-              setMessage('Версия зафиксирована как выданная')
+            onExportWord={exportReportTableToWord}
+            onPreview={async (sheetId) => {
+              setBusy(true)
+              setError('')
+              try {
+                const [reportWorkbook, reportCatalog] = await Promise.all([
+                  api.workbook(sheetId),
+                  api.catalog(sheetId),
+                ])
+                setReportTableData({ sheetId, workbook: reportWorkbook, catalog: reportCatalog })
+              } catch (exc) {
+                setError(exc instanceof Error ? exc.message : String(exc))
+              } finally {
+                setBusy(false)
+              }
             }}
           />
         ) : null}

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -19,12 +20,24 @@ class UserResponse(BaseModel):
     guide_seen: bool = False
 
 
+class HistoryPreferencesIn(BaseModel):
+    history_position: Literal["right", "bottom"] = "right"
+    history_panel_open: bool = True
+    history_right_width: int = Field(default=360, ge=100, le=760)
+    history_bottom_height: int = Field(default=260, ge=140, le=600)
+
+
+class HistoryPreferencesOut(HistoryPreferencesIn):
+    configured: bool = True
+
+
 class ObjectCreate(BaseModel):
-    name: str
-    station: str | None = None
-    turbine: str | None = None
-    cylinder: str | None = None
-    external_id: str | None = None
+    factory_number: str
+    turbine_name: str
+    station_name: str
+    station_number: str
+    series_turbines: str
+    kind: str
 
 
 class ObjectOut(BaseModel):
@@ -52,10 +65,16 @@ class CellOut(BaseModel):
     hyperlink: str | None
     display: str | None = None
     locked: bool = False
+    unified: bool = False
     updated_at: str | None = None
     updated_by: str | None = None
     options: list[str] = []
     last_change_id: str | None = None
+
+
+class CellUnificationRequest(BaseModel):
+    unified: bool
+    expected_updated_at: str | None = None
 
 
 class CellDraftRequest(BaseModel):
@@ -68,6 +87,11 @@ class CellConfirmRequest(BaseModel):
     value: str | None = None
     comment: str = Field(min_length=1)
     hyperlink: str | None = None
+    expected_updated_at: str | None = None
+
+
+class CellCommentRequest(BaseModel):
+    comment: str = Field(min_length=1)
     expected_updated_at: str | None = None
 
 
@@ -128,6 +152,9 @@ class ChangeSnap(BaseModel):
 
 class SessionRestoreRequest(BaseModel):
     cells: list[CellSnap] = []
+    extra_columns: list[dict] | None = None
+    column_overrides: dict | None = None
+    deleted_columns: list[str] | None = None
     extra_parameters: list[dict] | None = None
     parameter_overrides: dict | None = None
     deleted_parameters: list[str] | None = None
@@ -139,6 +166,9 @@ class SessionRestoreRequest(BaseModel):
 class CatalogResponse(BaseModel):
     columns: list[dict]
     parameters: list[dict]
+    column_overrides: dict = {}
+    deleted_columns: list[str] = []
+    extra_columns: list[dict] = []
     extra_parameters: list[dict] = []
     parameter_overrides: dict = {}
     deleted_parameters: list[str] = []
@@ -151,8 +181,20 @@ class WorkbookOut(BaseModel):
     created_at: datetime
     updated_at: datetime
     created_by: str
+    parent_workbook_id: str | None = None
+    sheet_name: str = "Исходные данные"
+    sheet_order: int = 0
+    is_primary: bool = False
     cells: list[CellOut]
     unsaved_count: int = 0
+
+
+class SheetCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+
+
+class SheetRenameRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
 
 
 class AddStageRequest(BaseModel):
@@ -179,11 +221,27 @@ class UpdateParameterRequest(BaseModel):
 class ReportCreateRequest(BaseModel):
     type: str = "short"
     compare_version_id: str | None = None
+    selected_parameter_keys: list[str] = Field(default_factory=list)
+    memo_number: str = ""
+    incoming_reference: str = ""
+    document_id: str = ""
+    recipient_block: str = ""
+    subject: str = ""
+    greeting: str = ""
+    narrative: str = ""
+    signature_block: str = ""
     extra_notes: str = ""
+
+
+class ReportTableExportRequest(BaseModel):
+    selected_parameter_keys: list[str] = Field(default_factory=list)
+    selected_column_keys: list[str] = Field(default_factory=list)
+    table_number: int = Field(default=1, ge=1)
 
 
 class ChangelogResponse(BaseModel):
     text: str
+    app_version: str
     releases: list[dict] = []
 
 
@@ -220,3 +278,15 @@ class NotificationOut(BaseModel):
     message: str
     created_at: datetime
     read: bool
+
+
+class TriangleSourceCell(BaseModel):
+    sheet_key: Literal["geometry", "flow_path"]
+    row: int = Field(ge=11)
+    column: int = Field(ge=2)
+
+
+class TriangleSyncRequest(BaseModel):
+    mode: Literal["selected", "all"]
+    cells: list[TriangleSourceCell] = Field(default_factory=list)
+    target_parameter_key: str | None = None
