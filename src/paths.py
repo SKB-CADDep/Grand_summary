@@ -63,11 +63,27 @@ def triangle_mapping_path() -> Path:
     return templates_dir() / "triangle_mapping.json"
 
 
+# False — локальная папка для тестов. True — каталог на файловом сервере.
+USE_FILESERVER_OBJECTS = False
+FILESERVER_OBJECTS_DATABASE = Path(
+    r"\\Fileserver\утз\10 Служба технического директора\05 СКБт\!Общая\objects\projects.json"
+)
+
+
+def objects_database_dir() -> Path:
+    configured = str(os.environ.get("GRAND_SUMMARY_OBJECTS_DIR") or "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    return project_root() / "временно бд объектов для тестов"
+
+
 def objects_database_path() -> Path:
     configured = str(os.environ.get("GRAND_SUMMARY_OBJECTS_FILE") or "").strip()
     if configured:
         return Path(configured).expanduser()
-    return Path(r"\\Fileserver\утз\10 Служба технического директора\05 СКБт\!Общая\objects\projects.json")
+    if USE_FILESERVER_OBJECTS:
+        return FILESERVER_OBJECTS_DATABASE
+    return objects_database_dir() / "projects.json"
 
 
 def materials_database_dir() -> Path:

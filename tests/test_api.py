@@ -92,11 +92,11 @@ def test_objects_loaded_from_shared_catalog(client):
     assert data[0]["name"] == "ТЭЦ-1 (ст.3) К-200 (зав.T-101)"
 
 
-def test_create_object_appends_shared_record(client):
+def test_create_object_does_not_change_catalog_file(client):
     from src.paths import objects_database_path
 
     catalog_path = objects_database_path()
-    original_records = json.loads(catalog_path.read_text(encoding="utf-8"))
+    original = catalog_path.read_text(encoding="utf-8")
     response = client.post(
         "/api/objects",
         json={
@@ -110,19 +110,19 @@ def test_create_object_appends_shared_record(client):
     )
     assert response.status_code == 201
     assert response.json()["name"] == "ТЭЦ-2 (ст.5) К-300 (зав.T-202)"
+    assert catalog_path.read_text(encoding="utf-8") == original
+    names = [item["name"] for item in client.get("/api/objects").json()]
+    assert "ТЭЦ-2 (ст.5) К-300 (зав.T-202)" in names
 
-    records = json.loads(catalog_path.read_text(encoding="utf-8"))
-    assert records[:-1] == original_records
-    created = records[-1]
-    assert set(created) == {
-        "ID_projects", "factory_number", "turbine_name", "station_name", "station_number",
-        "series_turbines", "kind", "hidden", "object_version", "updated_by", "updated_at",
-    }
-    assert created["ID_projects"] == "102"
-    assert created["hidden"] is False
-    assert created["object_version"] == 1
-    assert created["updated_by"]
-    assert created["updated_at"]
+
+def test_default_objects_catalog_is_local_test_folder(monkeypatch):
+    monkeypatch.delenv("GRAND_SUMMARY_OBJECTS_FILE", raising=False)
+    monkeypatch.delenv("GRAND_SUMMARY_OBJECTS_DIR", raising=False)
+    from src.paths import objects_database_path, project_root
+
+    path = objects_database_path()
+    assert path == project_root() / "временно бд объектов для тестов" / "projects.json"
+    assert path.is_file()
 
 
 def test_workbook_requires_object_and_table(client):

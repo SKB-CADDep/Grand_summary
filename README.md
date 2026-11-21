@@ -79,6 +79,7 @@ npm run dev
 - `GRAND_SUMMARY_ACL` — JSON с списками `editors` / `readers`. По умолчанию `data/acl.json` (`"editors": ["*"]`).
 - `templates/rules.json` — справочники и правила унификации.
 - `templates/triangle_mapping.json` — подписи файла тепловиков → ключи каталога.
+- Каталог объектов сейчас читается из `временно бд объектов для тестов/projects.json` (только чтение, файлы не меняются). Позже путь вернётся на файловый сервер. Переопределение: `GRAND_SUMMARY_OBJECTS_FILE`.
 
 ## Вкладки
 

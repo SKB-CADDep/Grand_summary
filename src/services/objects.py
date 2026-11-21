@@ -1,11 +1,8 @@
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -60,36 +57,32 @@ def _local_object(session: Session, record: dict[str, Any]) -> ObjectItem:
 
 
 def list_objects(session: Session) -> list[ObjectItem]:
-    items = [_local_object(session, record) for record in read_object_catalog()]
+    catalog = read_object_catalog()
+    items = [_local_object(session, record) for record in catalog]
+    catalog_ids = {_text(record.get("ID_projects")) for record in catalog}
+    extras = [
+        item
+        for item in session.query(ObjectItem).all()
+        if _text(item.external_id) and _text(item.external_id) not in catalog_ids
+    ]
     session.flush()
-    return sorted(items, key=lambda item: item.name.casefold())
+    return sorted([*items, *extras], key=lambda item: item.name.casefold())
 
 
 def get_object(session: Session, object_id: str) -> ObjectItem | None:
     return session.get(ObjectItem, object_id)
 
 
-def _next_project_id(records: list[dict[str, Any]]) -> str:
+def _next_project_id(records: list[dict[str, Any]], session: Session) -> str:
     ids = {_text(record.get("ID_projects")) for record in records}
+    for item in session.query(ObjectItem.external_id).all():
+        if item[0]:
+            ids.add(_text(item[0]))
     numeric_ids = [int(value) for value in ids if value.isdecimal()]
     candidate = max(numeric_ids, default=0) + 1
     while str(candidate) in ids:
         candidate += 1
     return str(candidate)
-
-
-def _append_record(path: Path, records: list[dict[str, Any]], record: dict[str, Any]) -> None:
-    descriptor, temporary_name = tempfile.mkstemp(prefix=f"{path.name}.", suffix=".tmp", dir=path.parent)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as output:
-            json.dump([*records, record], output, ensure_ascii=False, indent=2)
-            output.write("\n")
-            output.flush()
-            os.fsync(output.fileno())
-        os.replace(temporary_name, path)
-    except Exception:
-        Path(temporary_name).unlink(missing_ok=True)
-        raise
 
 
 def create_object(
@@ -103,9 +96,8 @@ def create_object(
     kind: str,
     updated_by: str,
 ) -> ObjectItem:
-    path = objects_database_path()
     records = read_object_catalog()
-    project_id = _next_project_id(records)
+    project_id = _next_project_id(records, session)
     record = {
         "ID_projects": project_id,
         "factory_number": factory_number.strip(),
@@ -119,7 +111,6 @@ def create_object(
         "updated_by": updated_by,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
-    _append_record(path, records, record)
     return _local_object(session, record)
 
 
