@@ -1,0 +1,44 @@
+{"ts": "2026-09-29T14:34:34+05:00", "actor": "pyagavrilov", "id": 1, "series_version": 1, "action": "created", "fields": {"name": {"from": "", "to": "Серия Т-100"}}}
+{"ts": "2026-09-29T14:57:05+05:00", "actor": "pyagavrilov", "id": 2, "series_version": 1, "action": "created", "fields": {"name": {"from": "", "to": "Серия ПТ-135"}}}
+{"ts": "2026-10-01T11:03:13+05:00", "actor": "ekaleksandrova", "id": 3, "series_version": 1, "action": "created", "fields": {"name": {"from": "", "to": "Т-250"}}}
+{"ts": "2026-10-01T11:03:16+05:00", "actor": "ekaleksandrova", "id": 4, "series_version": 1, "action": "created", "fields": {"name": {"from": "", "to": "Т-63"}}}
+{"ts": "2026-10-01T11:04:28+05:00", "actor": "ekaleksandrova", "id": 3, "series_version": 2, "action": "changed", "fields": {"name": {"from": "Т-250", "to": "Серия Т-250"}}}
+{"ts": "2026-10-01T11:04:33+05:00", "actor": "ekaleksandrova", "id": 4, "series_version": 2, "action": "changed", "fields": {"name": {"from": "Т-63", "to": "Серия Т-63"}}}
+{"ts": "2026-10-01T11:05:09+05:00", "actor": "ekaleksandrova", "id": 1, "series_version": 2, "action": "changed", "fields": {"name": {"from": "Серия Т-100", "to": "Серия Т-100 классическая"}}}
+{"ts": "2026-10-01T11:05:19+05:00", "actor": "ekaleksandrova", "id": 5, "series_version": 1, "action": "created", "fields": {"name": {"from": "", "to": "Серия Т-100 NG"}}}
+{"ts": "2026-10-01T11:06:04+05:00", "actor": "ekaleksandrova", "id": 6, "series_version": 1, "action": "created", "fields": {"name": {"from": "", "to": "Серия Т-185"}}}
+{"ts": "2026-10-01T11:15:48+05:00", "actor": "ekaleksandrova", "id": 7, "series_version": 1, "action": "created", "fields": {"name": {"from": "", "to": "Серия ПТ-140"}}}
+{"ts": "2026-10-01T11:18:23+05:00", "actor": "ekaleksandrova", "id": 8, "series_version": 1, "action": "created", "fields": {"name": {"from": "", "to": "ПТ-150, КТ-185"}}}
+{"ts": "2026-10-01T11:18:52+05:00", "actor": "ekaleksandrova", "id": 8, "series_version": 2, "action": "changed", "fields": {"name": {"from": "ПТ-150, КТ-185", "to": "Серия ПТ-150, КТ-185"}}}
+{"ts": "2026-10-01T11:20:43+05:00", "actor": "ekaleksandrova", "id": 9, "series_version": 1, "action": "created", "fields": {"name": {"from": "", "to": "Серия К-140"}}}
+{"ts": "2026-10-01T11:22:05+05:00", "actor": "ekaleksandrova", "id": 6, "series_version": 2, "action": "changed", "fields": {"name": {"from": "Серия Т-185", "to": "Серия Т-175 (185)"}}}
+{"ts": "2026-10-01T11:22:43+05:00", "actor": "ekaleksandrova", "id": 10, "series_version": 1, "action": "created", "fields": {"name": {"from": "", "to": "Серия Т-175 (185) NG"}}}
+{"ts": "2026-10-01T11:33:47+05:00", "actor": "ekaleksandrova", "id": 11, "series_version": 1, "action": "created", "fields": {"name": {"from": "", "to": "ПР-25"}}}
+{"ts": "2026-10-01T11:33:53+05:00", "actor": "ekaleksandrova", "id": 11, "series_version": 2, "action": "changed", "fields": {"name": {"from": "ПР-25", "to": "Серия ПР-25"}}}
+{"ts": "2026-10-01T11:41:11+05:00", "actor": "ekaleksandrova", "id": 12, "series_version": 1, "action": "created", "fields": {"name": {"from": "", "to": "Серия ПР-30"}}}
+{"ts": "2026-10-01T12:11:12+05:00", "actor": "ekaleksandrova", "id": 13, "series_version": 1, "action": "created", "fields": {"name": {"from": "", "to": "Серия Р-6"}}}
+{"ts": "2026-10-01T14:06:43+05:00", "actor": "yuamezenina", "id": 14, "series_version": 1, "action": "created", "fields": {"name": {"from": "", "to": "Серия Т-25 (АТ-25)"}}}
+{"ts": "2026-10-01T14:49:16+05:00", "actor": "akkalistratov", "id": 15, "series_version": 1, "action": "created", "fields": {"name": {"from": "", "to": "Серия Р-100"}}}
+{"ts": "2026-10-01T16:14:36+05:00", "actor": "akkalistratov", "id": 16, "series_version": 1, "action": "created", "fields": {"name": {"from": "", "to": "Серия Р-40"}}}
+{"ts": "2026-10-02T08:54:10+05:00", "actor": "akkalistratov", "id": 17, "series_version": 1, "action": "created", "fields": {"name": {"from": "", "to": "Серия Т-50"}}}
+{"ts": "2026-10-02T09:48:43+05:00", "actor": "akkalistratov", "id": 17, "series_version": 2, "action": "changed", "fields": {"name": {"from": "Серия Т-50", "to": "Серия Т-50 (ВТ-50)"}}}
+{"ts": "2026-10-02T10:06:10+05:00", "actor": "akkalistratov", "id": 17, "series_version": 3, "action": "changed", "fields": {"name": {"from": "Серия Т-50 (ВТ-50)", "to": "Серия Т-50"}}}
+{"ts": "2026-10-02T11:37:22+05:00", "actor": "akkalistratov", "id": 18, "series_version": 1, "action": "created", "fields": {"name": {"from": "", "to": "Тп-115"}}}
+{"ts": "2026-10-02T12:42:31+05:00", "actor": "akkalistratov", "id": 19, "series_version": 1, "action": "created", "fields": {"name": {"from": "", "to": "Р-50"}}}
+{"ts": "2026-10-02T12:42:57+05:00", "actor": "akkalistratov", "id": 19, "series_version": 2, "action": "changed", "fields": {"name": {"from": "Р-50", "to": "Серия Р-50"}}}
+{"ts": "2026-10-02T12:43:03+05:00", "actor": "akkalistratov", "id": 18, "series_version": 2, "action": "changed", "fields": {"name": {"from": "Тп-115", "to": "Серия Тп-115"}}}
+{"ts": "2026-10-02T13:08:21+05:00", "actor": "akkalistratov", "id": 20, "series_version": 1, "action": "created", "fields": {"name": {"from": "", "to": "Серия ПТ-60"}}}
+{"ts": "2026-10-05T09:10:47+05:00", "actor": "akkalistratov", "id": 21, "series_version": 1, "action": "created", "fields": {"name": {"from": "", "to": "ПТ-90"}}}
+{"ts": "2026-10-05T09:10:55+05:00", "actor": "akkalistratov", "id": 21, "series_version": 2, "action": "changed", "fields": {"name": {"from": "ПТ-90", "to": "Серия ПТ-90"}}}
+{"ts": "2026-10-05T09:17:16+05:00", "actor": "akkalistratov", "id": 22, "series_version": 1, "action": "created", "fields": {"name": {"from": "", "to": "Серия ПТ-65"}}}
+{"ts": "2026-10-05T16:22:47+05:00", "actor": "akkalistratov", "id": 23, "series_version": 1, "action": "created", "fields": {"name": {"from": "", "to": "Серия К-65"}}}
+{"ts": "2026-10-05T16:31:12+05:00", "actor": "akkalistratov", "id": 24, "series_version": 1, "action": "created", "fields": {"name": {"from": "", "to": "Серия Кп-77"}}}
+{"ts": "2026-10-05T16:33:02+05:00", "actor": "akkalistratov", "id": 25, "series_version": 1, "action": "created", "fields": {"name": {"from": "", "to": "Серия ПТ-30"}}}
+{"ts": "2026-10-05T16:34:25+05:00", "actor": "akkalistratov", "id": 26, "series_version": 1, "action": "created", "fields": {"name": {"from": "", "to": "Серия К-17"}}}
+{"ts": "2026-10-05T16:35:40+05:00", "actor": "akkalistratov", "id": 27, "series_version": 1, "action": "created", "fields": {"name": {"from": "", "to": "Серия ТНД-17"}}}
+{"ts": "2026-10-05T16:44:55+05:00", "actor": "akkalistratov", "id": 28, "series_version": 1, "action": "created", "fields": {"name": {"from": "", "to": "Серия К-63"}}}
+{"ts": "2026-10-07T14:16:15+05:00", "actor": "yuamezenina", "id": 29, "series_version": 1, "action": "created", "fields": {"name": {"from": "", "to": "Серия ПТ-50 (ВПТ-50)"}}}
+{"ts": "2026-10-07T14:40:26+05:00", "actor": "yuamezenina", "id": 30, "series_version": 1, "action": "created", "fields": {"name": {"from": "", "to": "Серия ПТ-25 (ВПТ-25-3)"}}}
+{"ts": "2026-10-07T16:27:20+05:00", "actor": "akkalistratov", "id": 31, "series_version": 1, "action": "created", "fields": {"name": {"from": "", "to": "Серия К-110"}}}
+{"ts": "2026-10-07T16:28:30+05:00", "actor": "akkalistratov", "id": 32, "series_version": 1, "action": "created", "fields": {"name": {"from": "", "to": "Серия Т-60"}}}
+{"ts": "2026-10-15T13:55:54+05:00", "actor": "grlotnik", "id": 33, "series_version": 1, "action": "created", "fields": {"name": {"from": "", "to": "К-77"}}}

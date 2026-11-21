@@ -1,0 +1,332 @@
+[
+  {
+    "id": 1,
+    "name": "Серия Т-100 классическая",
+    "hidden": false,
+    "series_version": 2,
+    "created_by": "pyagavrilov",
+    "created_at": "2026-09-29T14:34:34+05:00",
+    "updated_by": "ekaleksandrova",
+    "updated_at": "2026-10-01T11:05:09+05:00"
+  },
+  {
+    "id": 2,
+    "name": "Серия ПТ-135",
+    "hidden": false,
+    "series_version": 1,
+    "created_by": "pyagavrilov",
+    "created_at": "2026-09-29T14:57:05+05:00",
+    "updated_by": "pyagavrilov",
+    "updated_at": "2026-09-29T14:57:05+05:00"
+  },
+  {
+    "id": 3,
+    "name": "Серия Т-250",
+    "hidden": false,
+    "series_version": 2,
+    "created_by": "ekaleksandrova",
+    "created_at": "2026-10-01T11:03:13+05:00",
+    "updated_by": "ekaleksandrova",
+    "updated_at": "2026-10-01T11:04:28+05:00"
+  },
+  {
+    "id": 4,
+    "name": "Серия Т-63",
+    "hidden": false,
+    "series_version": 2,
+    "created_by": "ekaleksandrova",
+    "created_at": "2026-10-01T11:03:16+05:00",
+    "updated_by": "ekaleksandrova",
+    "updated_at": "2026-10-01T11:04:33+05:00"
+  },
+  {
+    "id": 5,
+    "name": "Серия Т-100 NG",
+    "hidden": false,
+    "series_version": 1,
+    "created_by": "ekaleksandrova",
+    "created_at": "2026-10-01T11:05:19+05:00",
+    "updated_by": "ekaleksandrova",
+    "updated_at": "2026-10-01T11:05:19+05:00"
+  },
+  {
+    "id": 6,
+    "name": "Серия Т-175 (185)",
+    "hidden": false,
+    "series_version": 2,
+    "created_by": "ekaleksandrova",
+    "created_at": "2026-10-01T11:06:04+05:00",
+    "updated_by": "ekaleksandrova",
+    "updated_at": "2026-10-01T11:22:05+05:00"
+  },
+  {
+    "id": 7,
+    "name": "Серия ПТ-140",
+    "hidden": false,
+    "series_version": 1,
+    "created_by": "ekaleksandrova",
+    "created_at": "2026-10-01T11:15:48+05:00",
+    "updated_by": "ekaleksandrova",
+    "updated_at": "2026-10-01T11:15:48+05:00"
+  },
+  {
+    "id": 8,
+    "name": "Серия ПТ-150, КТ-185",
+    "hidden": false,
+    "series_version": 2,
+    "created_by": "ekaleksandrova",
+    "created_at": "2026-10-01T11:18:23+05:00",
+    "updated_by": "ekaleksandrova",
+    "updated_at": "2026-10-01T11:18:52+05:00"
+  },
+  {
+    "id": 9,
+    "name": "Серия К-140",
+    "hidden": false,
+    "series_version": 1,
+    "created_by": "ekaleksandrova",
+    "created_at": "2026-10-01T11:20:43+05:00",
+    "updated_by": "ekaleksandrova",
+    "updated_at": "2026-10-01T11:20:43+05:00"
+  },
+  {
+    "id": 10,
+    "name": "Серия Т-175 (185) NG",
+    "hidden": false,
+    "series_version": 1,
+    "created_by": "ekaleksandrova",
+    "created_at": "2026-10-01T11:22:43+05:00",
+    "updated_by": "ekaleksandrova",
+    "updated_at": "2026-10-01T11:22:43+05:00"
+  },
+  {
+    "id": 11,
+    "name": "Серия ПР-25",
+    "hidden": false,
+    "series_version": 2,
+    "created_by": "ekaleksandrova",
+    "created_at": "2026-10-01T11:33:47+05:00",
+    "updated_by": "ekaleksandrova",
+    "updated_at": "2026-10-01T11:33:53+05:00"
+  },
+  {
+    "id": 12,
+    "name": "Серия ПР-30",
+    "hidden": false,
+    "series_version": 1,
+    "created_by": "ekaleksandrova",
+    "created_at": "2026-10-01T11:41:11+05:00",
+    "updated_by": "ekaleksandrova",
+    "updated_at": "2026-10-01T11:41:11+05:00"
+  },
+  {
+    "id": 13,
+    "name": "Серия Р-6",
+    "hidden": false,
+    "series_version": 1,
+    "created_by": "ekaleksandrova",
+    "created_at": "2026-10-01T12:11:12+05:00",
+    "updated_by": "ekaleksandrova",
+    "updated_at": "2026-10-01T12:11:12+05:00"
+  },
+  {
+    "id": 14,
+    "name": "Серия Т-25 (АТ-25)",
+    "hidden": false,
+    "series_version": 1,
+    "created_by": "yuamezenina",
+    "created_at": "2026-10-01T14:06:43+05:00",
+    "updated_by": "yuamezenina",
+    "updated_at": "2026-10-01T14:06:43+05:00"
+  },
+  {
+    "id": 15,
+    "name": "Серия Р-100",
+    "hidden": false,
+    "series_version": 1,
+    "created_by": "akkalistratov",
+    "created_at": "2026-10-01T14:49:16+05:00",
+    "updated_by": "akkalistratov",
+    "updated_at": "2026-10-01T14:49:16+05:00"
+  },
+  {
+    "id": 16,
+    "name": "Серия Р-40",
+    "hidden": false,
+    "series_version": 1,
+    "created_by": "akkalistratov",
+    "created_at": "2026-10-01T16:14:36+05:00",
+    "updated_by": "akkalistratov",
+    "updated_at": "2026-10-01T16:14:36+05:00"
+  },
+  {
+    "id": 17,
+    "name": "Серия Т-50",
+    "hidden": false,
+    "series_version": 3,
+    "created_by": "akkalistratov",
+    "created_at": "2026-10-02T08:54:10+05:00",
+    "updated_by": "akkalistratov",
+    "updated_at": "2026-10-02T10:06:10+05:00"
+  },
+  {
+    "id": 18,
+    "name": "Серия Тп-115",
+    "hidden": false,
+    "series_version": 2,
+    "created_by": "akkalistratov",
+    "created_at": "2026-10-02T11:37:22+05:00",
+    "updated_by": "akkalistratov",
+    "updated_at": "2026-10-02T12:43:03+05:00"
+  },
+  {
+    "id": 19,
+    "name": "Серия Р-50",
+    "hidden": false,
+    "series_version": 2,
+    "created_by": "akkalistratov",
+    "created_at": "2026-10-02T12:42:31+05:00",
+    "updated_by": "akkalistratov",
+    "updated_at": "2026-10-02T12:42:57+05:00"
+  },
+  {
+    "id": 20,
+    "name": "Серия ПТ-60",
+    "hidden": false,
+    "series_version": 1,
+    "created_by": "akkalistratov",
+    "created_at": "2026-10-02T13:08:21+05:00",
+    "updated_by": "akkalistratov",
+    "updated_at": "2026-10-02T13:08:21+05:00"
+  },
+  {
+    "id": 21,
+    "name": "Серия ПТ-90",
+    "hidden": false,
+    "series_version": 2,
+    "created_by": "akkalistratov",
+    "created_at": "2026-10-05T09:10:47+05:00",
+    "updated_by": "akkalistratov",
+    "updated_at": "2026-10-05T09:10:55+05:00"
+  },
+  {
+    "id": 22,
+    "name": "Серия ПТ-65",
+    "hidden": false,
+    "series_version": 1,
+    "created_by": "akkalistratov",
+    "created_at": "2026-10-05T09:17:16+05:00",
+    "updated_by": "akkalistratov",
+    "updated_at": "2026-10-05T09:17:16+05:00"
+  },
+  {
+    "id": 23,
+    "name": "Серия К-65",
+    "hidden": false,
+    "series_version": 1,
+    "created_by": "akkalistratov",
+    "created_at": "2026-10-05T16:22:47+05:00",
+    "updated_by": "akkalistratov",
+    "updated_at": "2026-10-05T16:22:47+05:00"
+  },
+  {
+    "id": 24,
+    "name": "Серия Кп-77",
+    "hidden": false,
+    "series_version": 1,
+    "created_by": "akkalistratov",
+    "created_at": "2026-10-05T16:31:12+05:00",
+    "updated_by": "akkalistratov",
+    "updated_at": "2026-10-05T16:31:12+05:00"
+  },
+  {
+    "id": 25,
+    "name": "Серия ПТ-30",
+    "hidden": false,
+    "series_version": 1,
+    "created_by": "akkalistratov",
+    "created_at": "2026-10-05T16:33:02+05:00",
+    "updated_by": "akkalistratov",
+    "updated_at": "2026-10-05T16:33:02+05:00"
+  },
+  {
+    "id": 26,
+    "name": "Серия К-17",
+    "hidden": false,
+    "series_version": 1,
+    "created_by": "akkalistratov",
+    "created_at": "2026-10-05T16:34:25+05:00",
+    "updated_by": "akkalistratov",
+    "updated_at": "2026-10-05T16:34:25+05:00"
+  },
+  {
+    "id": 27,
+    "name": "Серия ТНД-17",
+    "hidden": false,
+    "series_version": 1,
+    "created_by": "akkalistratov",
+    "created_at": "2026-10-05T16:35:40+05:00",
+    "updated_by": "akkalistratov",
+    "updated_at": "2026-10-05T16:35:40+05:00"
+  },
+  {
+    "id": 28,
+    "name": "Серия К-63",
+    "hidden": false,
+    "series_version": 1,
+    "created_by": "akkalistratov",
+    "created_at": "2026-10-05T16:44:55+05:00",
+    "updated_by": "akkalistratov",
+    "updated_at": "2026-10-05T16:44:55+05:00"
+  },
+  {
+    "id": 29,
+    "name": "Серия ПТ-50 (ВПТ-50)",
+    "hidden": false,
+    "series_version": 1,
+    "created_by": "yuamezenina",
+    "created_at": "2026-10-07T14:16:15+05:00",
+    "updated_by": "yuamezenina",
+    "updated_at": "2026-10-07T14:16:15+05:00"
+  },
+  {
+    "id": 30,
+    "name": "Серия ПТ-25 (ВПТ-25-3)",
+    "hidden": false,
+    "series_version": 1,
+    "created_by": "yuamezenina",
+    "created_at": "2026-10-07T14:40:26+05:00",
+    "updated_by": "yuamezenina",
+    "updated_at": "2026-10-07T14:40:26+05:00"
+  },
+  {
+    "id": 31,
+    "name": "Серия К-110",
+    "hidden": false,
+    "series_version": 1,
+    "created_by": "akkalistratov",
+    "created_at": "2026-10-07T16:27:20+05:00",
+    "updated_by": "akkalistratov",
+    "updated_at": "2026-10-07T16:27:20+05:00"
+  },
+  {
+    "id": 32,
+    "name": "Серия Т-60",
+    "hidden": false,
+    "series_version": 1,
+    "created_by": "akkalistratov",
+    "created_at": "2026-10-07T16:28:30+05:00",
+    "updated_by": "akkalistratov",
+    "updated_at": "2026-10-07T16:28:30+05:00"
+  },
+  {
+    "id": 33,
+    "name": "К-77",
+    "hidden": false,
+    "series_version": 1,
+    "created_by": "grlotnik",
+    "created_at": "2026-10-15T13:55:54+05:00",
+    "updated_by": "grlotnik",
+    "updated_at": "2026-10-15T13:55:54+05:00"
+  }
+]
