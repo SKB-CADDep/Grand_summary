@@ -1118,11 +1118,6 @@ def test_delete_sheet_preserves_primary_sheet_and_allows_reimport(client, tmp_pa
     persisted_sheets = client.get(f"/api/workbooks/{workbook_id}/sheets").json()
     assert [sheet["id"] for sheet in persisted_sheets] == [primary["id"], copied["id"]]
 
-    primary_delete = client.delete(
-        f"/api/workbooks/{workbook_id}/sheets/{primary['id']}"
-    )
-    assert primary_delete.status_code == 400
-
     deleted = client.delete(
         f"/api/workbooks/{workbook_id}/sheets/{copied['id']}"
     )
@@ -1146,6 +1141,43 @@ def test_delete_sheet_preserves_primary_sheet_and_allows_reimport(client, tmp_pa
     assert imported.json()["active_sheet_id"] == primary["id"]
     assert client.get(f"/api/workbooks/{workbook_id}").status_code == 200
     assert [sheet["id"] for sheet in client.get(f"/api/workbooks/{workbook_id}/sheets").json()] == [primary["id"]]
+
+
+def test_delete_root_sheet_promotes_remaining_sheet(client):
+    workbook_id = _workbook_id(client)
+    root = client.get(f"/api/workbooks/{workbook_id}").json()
+    copied = client.post(
+        f"/api/workbooks/{workbook_id}/sheets",
+        json={"name": "Импортированный лист"},
+    ).json()
+    extra = client.post(
+        f"/api/workbooks/{workbook_id}/sheets",
+        json={"name": "Ещё один лист"},
+    ).json()
+
+    last_only = client.delete(f"/api/workbooks/{workbook_id}/sheets/{workbook_id}")
+    assert last_only.status_code == 200
+    payload = last_only.json()
+    assert payload["active_sheet_id"] == copied["id"]
+    assert [sheet["id"] for sheet in payload["sheets"]] == [copied["id"], extra["id"]]
+    assert client.get(f"/api/workbooks/{root['id']}").status_code == 404
+    assert client.get(f"/api/workbooks/{copied['id']}").json()["parent_workbook_id"] is None
+    assert client.get(f"/api/workbooks/{extra['id']}").json()["parent_workbook_id"] == copied["id"]
+
+    reopened = client.post("/api/workbooks", json={"object_id": root["object_id"]})
+    assert reopened.status_code == 200
+    assert reopened.json()["id"] == copied["id"]
+    sheets = client.get(f"/api/workbooks/{copied['id']}/sheets").json()
+    assert [sheet["id"] for sheet in sheets] == [copied["id"], extra["id"]]
+
+    leftover = client.delete(f"/api/workbooks/{copied['id']}/sheets/{copied['id']}")
+    assert leftover.status_code == 200
+    assert leftover.json()["active_sheet_id"] == extra["id"]
+    assert [sheet["id"] for sheet in leftover.json()["sheets"]] == [extra["id"]]
+
+    blocked = client.delete(f"/api/workbooks/{extra['id']}/sheets/{extra['id']}")
+    assert blocked.status_code == 400
+    assert blocked.json()["detail"] == "Нельзя удалить единственный лист проекта"
 
 
 def test_import_dated_object_workbook_after_deleting_a_sheet(client, tmp_path):
@@ -1342,3 +1374,55 @@ def test_primary_sheet_moves_to_front_without_changing_project_root(client):
     )
     assert allowed_write.status_code == 200
     assert allowed_write.json()["status"] == "draft"
+
+
+def test_import_excel_matches_short_labels_and_preamble(client):
+    excel = Workbook()
+    sheet = excel.active
+    sheet.title = "01.04.2026"
+    sheet.append(["Дата внесения изменений", "Служебная записка"])
+    sheet.append([None, "№ ступени"])
+    sheet.append(["Наименование параметра", "Ед. изм.", "1", "2"])
+    sheet.append(["Характеристики проточной части:"])
+    sheet.append(["Высота сопловой лопатки, мм", "мм", 120, 125])
+    file_content = BytesIO()
+    excel.save(file_content)
+    file_content.seek(0)
+
+    workbook_id = _workbook_id(client)
+    imported = client.post(
+        f"/api/workbooks/{workbook_id}/import-excel",
+        files={"file": ("object-parameters.xlsx", file_content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert imported.status_code == 200
+    result = imported.json()
+    assert result["imported"] == 2
+    data = client.get(f"/api/workbooks/{result['active_sheet_id']}").json()
+    cells = {(cell["parameter_key"], cell["column_key"]): cell for cell in data["cells"]}
+    assert cells[("r010", "s1")]["value"] == "120"
+    assert cells[("r010", "s2")]["value"] == "125"
+
+
+def test_import_excel_roundtrip_exported_layout(client):
+    excel = Workbook()
+    sheet = excel.active
+    sheet.title = "Лист проекта"
+    sheet.append(["Наименование параметра", "Ед. изм.", None, "1", "2"])
+    sheet.append(["Характеристики проточной части:", None, None, None, None])
+    sheet.append(["Высота сопловой лопатки (L'), мм", "мм", None, 77, 80])
+    file_content = BytesIO()
+    excel.save(file_content)
+    file_content.seek(0)
+
+    workbook_id = _workbook_id(client)
+    imported = client.post(
+        f"/api/workbooks/{workbook_id}/import-excel",
+        files={"file": ("export.xlsx", file_content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert imported.status_code == 200
+    assert imported.json()["imported"] == 2
+    active = imported.json()["active_sheet_id"]
+    data = client.get(f"/api/workbooks/{active}").json()
+    cells = {(cell["parameter_key"], cell["column_key"]): cell for cell in data["cells"]}
+    assert cells[("r010", "s1")]["value"] == "77"
+    assert cells[("r010", "s2")]["value"] == "80"

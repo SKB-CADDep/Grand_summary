@@ -440,7 +440,14 @@ class InstructionDialog(QDialog):
 
 
 class UnsavedDialog(QDialog):
-    def __init__(self, items: list[dict], parent: QWidget | None = None, allow_skip: bool = False) -> None:
+    def __init__(
+        self,
+        items: list[dict],
+        parent: QWidget | None = None,
+        allow_skip: bool = False,
+        on_save=None,
+        on_discard=None,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Несохранённые ячейки")
         self.resize(720, 460)
@@ -448,6 +455,9 @@ class UnsavedDialog(QDialog):
         self._items = items
         self._comments: dict[int, QLineEdit] = {}
         self._actions: dict[int, str] = {}
+        self._blocks: dict[int, QFrame] = {}
+        self._on_save = on_save
+        self._on_discard = on_discard
         layout = QVBoxLayout(self)
         intro = QLabel("Жёлтых ячеек быть не должно. Сохраните с комментарием или отмените черновик:")
         intro.setWordWrap(True)
@@ -467,13 +477,14 @@ class UnsavedDialog(QDialog):
             self._comments[index] = comment
             save = QPushButton("Сохранить")
             discard = QPushButton("Отменить")
-            save.clicked.connect(lambda _=False, i=index: self._mark(i, "confirm"))
-            discard.clicked.connect(lambda _=False, i=index: self._mark(i, "discard"))
+            save.clicked.connect(lambda _=False, i=index: self._save_row(i))
+            discard.clicked.connect(lambda _=False, i=index: self._discard_row(i))
             actions.addWidget(comment, 1)
             actions.addWidget(save)
             actions.addWidget(discard)
             row.addLayout(actions)
             form.addWidget(block)
+            self._blocks[index] = block
         form.addStretch(1)
         scroll.setWidget(inner)
         layout.addWidget(scroll, 1)
@@ -484,18 +495,41 @@ class UnsavedDialog(QDialog):
             buttons.addWidget(skip)
         buttons.addStretch(1)
         close = QPushButton("Закрыть")
-        close.clicked.connect(self.reject)
-        apply_btn = QPushButton("Применить")
-        apply_btn.clicked.connect(self.accept)
+        close.clicked.connect(self.accept)
         buttons.addWidget(close)
-        buttons.addWidget(apply_btn)
         layout.addLayout(buttons)
 
-    def _mark(self, index: int, action: str) -> None:
-        self._actions[index] = action
-        field = self._comments[index]
-        field.setEnabled(action != "discard")
-        field.setStyleSheet("background: #dff0d8;" if action == "confirm" else "background: #fff3cd;")
+    def _remaining(self) -> int:
+        return sum(1 for block in self._blocks.values() if block.isVisible())
+
+    def _hide_row(self, index: int) -> None:
+        block = self._blocks.get(index)
+        if block:
+            block.hide()
+        if self._remaining() == 0:
+            self.accept()
+
+    def _save_row(self, index: int) -> None:
+        comment = self._comments[index].text().strip()
+        if not comment:
+            self._comments[index].setFocus()
+            return
+        try:
+            if self._on_save:
+                self._on_save(self._items[index], comment)
+        except Exception:
+            return
+        self._actions[index] = "confirm"
+        self._hide_row(index)
+
+    def _discard_row(self, index: int) -> None:
+        try:
+            if self._on_discard:
+                self._on_discard(self._items[index])
+        except Exception:
+            return
+        self._actions[index] = "discard"
+        self._hide_row(index)
 
     def _skip(self) -> None:
         self.skipped = True
@@ -505,10 +539,11 @@ class UnsavedDialog(QDialog):
         out = []
         for index, item in enumerate(self._items):
             action = self._actions.get(index)
-            if not action:
-                continue
             comment = self._comments[index].text().strip()
-            out.append((item, action, comment))
+            if action:
+                out.append((item, action, comment))
+            elif comment:
+                out.append((item, "confirm", comment))
         return out
 
     def comments(self) -> list[tuple[dict, str]]:

@@ -1319,14 +1319,17 @@ function TableTabContent({
               }}>
                 Копировать лист
               </button>
-              {contextMenuSheet.id !== (workbook.parent_workbook_id || workbook.id) ? (
-                <button type="button" role="menuitem" disabled={!canWrite || busy || contextMenuSheet.is_primary} onClick={() => {
+              <button
+                type="button"
+                role="menuitem"
+                disabled={!canWrite || busy || sheets.length <= 1}
+                onClick={() => {
                   setContextMenu(null)
                   onDeleteSheet(contextMenuSheet.id)
-                }}>
-                  Удалить лист
-                </button>
-              ) : null}
+                }}
+              >
+                Удалить лист
+              </button>
             </>
           ) : contextMenu.area === 'history' ? (
             <button

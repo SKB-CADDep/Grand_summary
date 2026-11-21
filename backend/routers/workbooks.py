@@ -300,30 +300,24 @@ def delete_sheet(
 ):
     workbook = _workbook_or_404(session, workbook_id)
     root = workbook.parent or workbook
-    if sheet_id == root.id:
-        raise HTTPException(status_code=400, detail="Основной лист удалить нельзя")
     target = session.get(Workbook, sheet_id)
-    if target is None or target.parent_workbook_id != root.id:
+    if target is None or (target.id != root.id and target.parent_workbook_id != root.id):
         raise HTTPException(status_code=404, detail="Лист не найден")
-    if target.is_primary:
-        raise HTTPException(status_code=400, detail="Сначала снимите с листа статус основного")
-
-    session.delete(target)
-    session.flush()
-    sheets = workbook_service.list_sheet_workbooks(session, root)
-    for order, item in enumerate(sheets):
-        item.sheet_order = order
-    session.flush()
+    try:
+        sheets, active_id = workbook_service.delete_sheet_workbook(session, root, target)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {
         "sheets": [
             {
                 "id": item.id,
                 "name": item.sheet_name,
                 "order": item.sheet_order,
+                "is_primary": item.is_primary,
             }
             for item in sheets
         ],
-        "active_sheet_id": sheets[0].id,
+        "active_sheet_id": active_id,
     }
 
 
@@ -387,14 +381,13 @@ async def import_excel_sheets(
         importable_sheets = [
             sheet
             for sheet in imported_excel.worksheets
-            if sheet.title.strip().casefold() != "протокол изменений"
+            if workbook_import.is_importable_sheet_title(sheet.title)
         ]
         if not importable_sheets:
             raise ValueError("В Excel-файле нет листов для импорта")
         sheets = workbook_service.list_sheet_workbooks(session, root)
         use_root = (
             root.sheet_name == "Исходные данные"
-            and not root.is_primary
             and not workbook_import.workbook_has_values(root)
             and len(sheets) == 1
         )
@@ -414,6 +407,7 @@ async def import_excel_sheets(
             if index == 0 and use_root:
                 target = root
                 target.sheet_order = 0
+                target.sheet_name = name
             else:
                 target = workbook_import.copy_sheet(
                     session, structure_source, name, username, include_values=False

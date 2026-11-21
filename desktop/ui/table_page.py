@@ -1,27 +1,34 @@
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QAction, QBrush, QColor, QKeySequence, QShortcut
+from html import escape
+
+from PyQt6.QtCore import QEvent, QUrl, Qt, pyqtSignal
+from PyQt6.QtGui import QAction, QBrush, QColor, QDesktopServices, QFont, QFontMetrics, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QComboBox,
+    QFrame,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMenu,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QSplitter,
     QStyledItemDelegate,
     QTableWidget,
     QTableWidgetItem,
-    QTabBar,
     QVBoxLayout,
     QWidget,
 )
 
 from desktop.ui.icons import eye_icon, pencil_icon
+from desktop.ui.sheet_table import FrozenSheetTable
 from desktop.ui.style import COMPUTED, CONFIRMED, DRAFT, HIGHLIGHT, PARAM_BG, PRIMARY, SECTION_BG, TRIANGLE, UNIFIED
 
 PARAM_ROLE = Qt.ItemDataRole.UserRole
@@ -46,7 +53,7 @@ def _status_color(cell: dict | None, row_kind: str) -> QColor | None:
         return QColor(CONFIRMED)
     if status == "triangle":
         return QColor(TRIANGLE)
-    if status in {"computed", "initial"}:
+    if status == "computed":
         return QColor(COMPUTED)
     return None
 
@@ -81,6 +88,63 @@ class CellDelegate(QStyledItemDelegate):
             model.setData(index, editor.currentText(), Qt.ItemDataRole.EditRole)
             return
         model.setData(index, editor.text(), Qt.ItemDataRole.EditRole)
+
+
+class SheetTabBar(QFrame):
+    sheet_selected = pyqtSignal(str)
+    menu_requested = pyqtSignal(str, object)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("sheet-tabs")
+        self.buttons: dict[str, QPushButton] = {}
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 0, 8, 0)
+        layout.setSpacing(3)
+        self._row = QWidget()
+        self._row_layout = QHBoxLayout(self._row)
+        self._row_layout.setContentsMargins(0, 0, 0, 0)
+        self._row_layout.setSpacing(3)
+        self._row_layout.addStretch(1)
+        scroller = QScrollArea()
+        scroller.setWidgetResizable(True)
+        scroller.setFrameShape(QFrame.Shape.NoFrame)
+        scroller.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroller.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroller.setFixedHeight(38)
+        scroller.setWidget(self._row)
+        layout.addWidget(scroller)
+
+    def set_sheets(self, sheets: list[dict], current_id: str | None) -> None:
+        while self._row_layout.count() > 1:
+            item = self._row_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+        self.buttons = {}
+        for sheet in sheets:
+            sheet_id = str(sheet.get("id") or "")
+            label = sheet.get("name") or ""
+            if sheet.get("is_primary"):
+                label = f"{label} · основной"
+            button = QPushButton(label)
+            button.setProperty("sheetTab", True)
+            button.setCheckable(True)
+            button.setAutoExclusive(True)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+            bold = QFont(button.font())
+            bold.setWeight(QFont.Weight.DemiBold)
+            button.setMinimumWidth(QFontMetrics(bold).horizontalAdvance(label) + 28)
+            button.setChecked(sheet_id == current_id)
+            button.setEnabled(not bool(self.property("busy")))
+            button.clicked.connect(lambda _=False, sid=sheet_id: self.sheet_selected.emit(sid))
+            button.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            button.customContextMenuRequested.connect(
+                lambda pos, sid=sheet_id, btn=button: self.menu_requested.emit(sid, btn.mapToGlobal(pos))
+            )
+            self._row_layout.insertWidget(self._row_layout.count() - 1, button)
+            self.buttons[sheet_id] = button
 
 
 class TablePage(QWidget):
@@ -128,6 +192,9 @@ class TablePage(QWidget):
         self._selected: tuple[str, str] | None = None
         self._find_hits: list[tuple[int, int]] = []
         self._find_index = 0
+        self._hover_keys: tuple[str, str] | None = None
+        self._draft_save_target: tuple[str, str] | None = None
+        self._history_sizes = {"right": 360, "bottom": 260}
 
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
@@ -217,7 +284,7 @@ class TablePage(QWidget):
             row1.addWidget(widget)
         struct.addLayout(row1)
         row2 = QHBoxLayout()
-        row2.addWidget(QLabel("Столбцы листа"))
+        row2.addWidget(QLabel("Шапка таблицы"))
         self.column_combo = QComboBox()
         self.column_combo.currentIndexChanged.connect(self._column_picked)
         self.column_label = QLineEdit()
@@ -240,8 +307,15 @@ class TablePage(QWidget):
         ):
             row2.addWidget(widget)
         struct.addLayout(row2)
-        self.structure_box.hide()
-        root.addWidget(self.structure_box)
+        self.structure_panel = QScrollArea()
+        self.structure_panel.setWidgetResizable(True)
+        self.structure_panel.setFrameShape(QFrame.Shape.NoFrame)
+        self.structure_panel.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.structure_panel.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.structure_panel.setFixedHeight(96)
+        self.structure_panel.setWidget(self.structure_box)
+        self.structure_panel.hide()
+        root.addWidget(self.structure_panel)
 
         self.find_bar = QWidget()
         find_row = QHBoxLayout(self.find_bar)
@@ -265,18 +339,15 @@ class TablePage(QWidget):
         root.addWidget(self.find_bar)
         QShortcut(QKeySequence.StandardKey.Find, self, self._open_find)
 
-        self.sheet_bar = QTabBar()
+        self.sheet_bar = SheetTabBar()
         self.sheet_bar.setObjectName("guide-sheet")
-        self.sheet_bar.setDrawBase(False)
-        self.sheet_bar.setExpanding(False)
-        self.sheet_bar.currentChanged.connect(self._sheet_changed)
-        self.sheet_bar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.sheet_bar.customContextMenuRequested.connect(self._sheet_menu)
+        self.sheet_bar.sheet_selected.connect(self._sheet_changed)
+        self.sheet_bar.menu_requested.connect(self._sheet_menu_at)
         root.addWidget(self.sheet_bar)
 
         split = QSplitter()
         split.setOrientation(Qt.Orientation.Horizontal)
-        self.table = QTableWidget()
+        self.table = FrozenSheetTable()
         self.table.setObjectName("guide-table")
         self.table.setItemDelegate(CellDelegate(self.table))
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -286,6 +357,11 @@ class TablePage(QWidget):
         self.table.itemChanged.connect(self._item_changed)
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._cell_menu)
+        self.table.frozen_cell_clicked.connect(self._cell_clicked)
+        self.table.frozen_menu_requested.connect(self._frozen_menu)
+        self.table.header_clicked.connect(self._header_clicked)
+        self.table.header_double_clicked.connect(self._header_double_clicked)
+        self.table.header_menu_requested.connect(self._header_menu)
         self.table.currentCellChanged.connect(self._current_changed)
         self.table.setMouseTracking(True)
         self.table.viewport().setMouseTracking(True)
@@ -310,7 +386,8 @@ class TablePage(QWidget):
         edit_layout = QVBoxLayout(self.edit_row)
         edit_layout.setContentsMargins(0, 0, 0, 0)
         self.link_edit = QLineEdit()
-        self.link_edit.setPlaceholderText("Ссылка (прячется в номере)")
+        self.link_edit.setPlaceholderText("Ссылка на документ (прячется в номере)")
+        self.link_edit.editingFinished.connect(self._save_link_draft)
         self.comment_edit = QLineEdit()
         self.comment_edit.setPlaceholderText("Комментарий (обязателен)")
         btn_row = QHBoxLayout()
@@ -324,6 +401,13 @@ class TablePage(QWidget):
         edit_layout.addWidget(self.comment_edit)
         edit_layout.addLayout(btn_row)
         hist.addWidget(self.edit_row)
+        self.link_view = QLabel()
+        self.link_view.setProperty("role", "hint")
+        self.link_view.setTextFormat(Qt.TextFormat.RichText)
+        self.link_view.setOpenExternalLinks(True)
+        self.link_view.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        self.link_view.hide()
+        hist.addWidget(self.link_view)
         self.view_hint = QLabel("Чтобы изменить значение, включите режим редактирования.")
         self.view_hint.setProperty("role", "hint")
         hist.addWidget(self.view_hint)
@@ -341,7 +425,7 @@ class TablePage(QWidget):
         self.add_comment_btn = QPushButton("Добавить комментарий")
         cancel_comment = QPushButton("Отмена")
         self.add_comment_btn.clicked.connect(self._submit_comment)
-        cancel_comment.clicked.connect(lambda: self.comment_box.hide())
+        cancel_comment.clicked.connect(self._cancel_comment)
         comment_btns.addWidget(self.add_comment_btn)
         comment_btns.addWidget(cancel_comment)
         comment_layout.addWidget(self.comment_label)
@@ -358,6 +442,13 @@ class TablePage(QWidget):
         self.history_empty.setProperty("role", "hint")
         hist.addWidget(self.history_empty)
         self.history_panel.setMinimumWidth(280)
+        self.history_panel.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.history_panel.customContextMenuRequested.connect(self._history_menu)
+        self.history_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.history_table.customContextMenuRequested.connect(self._history_menu)
+        self.history_table.viewport().setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.history_table.viewport().customContextMenuRequested.connect(self._history_menu)
+        self.history_panel.installEventFilter(self)
         split.addWidget(self.history_panel)
         split.setStretchFactor(0, 1)
         split.setSizes([900, 360])
@@ -373,8 +464,10 @@ class TablePage(QWidget):
         if self.workbook and self.workbook.get("is_primary"):
             mode = "view"
         self.table_mode = mode
-        self.view_btn.setChecked(mode == "view")
-        self.edit_btn.setChecked(mode == "edit")
+        primary = bool((self.workbook or {}).get("is_primary"))
+        self.edit_btn.setVisible(not primary)
+        self.view_btn.setChecked(mode == "view" or primary)
+        self.edit_btn.setChecked(mode == "edit" and not primary)
         self.view_btn.setProperty("active", mode == "view")
         self.edit_btn.setProperty("active", mode == "edit")
         self.view_btn.style().unpolish(self.view_btn)
@@ -383,7 +476,7 @@ class TablePage(QWidget):
         self.edit_btn.style().polish(self.edit_btn)
         if mode != "edit":
             self.structure_edit = False
-            self.structure_box.hide()
+            self.structure_panel.hide()
         self._apply_edit_triggers()
         self._refresh_hints()
 
@@ -420,8 +513,14 @@ class TablePage(QWidget):
         self.report_btn.setEnabled(has_book and not busy)
         if workbook and workbook.get("is_primary"):
             self.set_mode("view")
-        self.edit_btn.setEnabled(can_write and not (workbook or {}).get("is_primary"))
-        self.structure_btn.setVisible(self.table_mode == "edit" and writable and not (workbook or {}).get("is_primary"))
+        primary = bool((workbook or {}).get("is_primary"))
+        self.edit_btn.setVisible(not primary)
+        self.edit_btn.setEnabled(can_write and not primary)
+        self.structure_btn.setVisible(writable and not primary)
+        if self.structure_edit and self.table_mode == "edit":
+            self.structure_panel.show()
+        else:
+            self.structure_panel.hide()
         self._fill_sheets()
         self._fill_columns()
         self._rebuild_table()
@@ -429,13 +528,23 @@ class TablePage(QWidget):
 
     def set_history_layout(self, position: str, opened: bool, sizes: dict) -> None:
         self._history_position = position
+        self._history_sizes = {
+            "right": int(sizes.get("right") or 360),
+            "bottom": int(sizes.get("bottom") or 260),
+        }
         self.history_panel.setVisible(opened)
+        if not opened:
+            return
         if position == "bottom":
             self.split.setOrientation(Qt.Orientation.Vertical)
-            self.split.setSizes([max(200, 800 - sizes.get("bottom", 260)), sizes.get("bottom", 260)])
+            self.split.setSizes([max(200, 800 - self._history_sizes["bottom"]), self._history_sizes["bottom"]])
         else:
             self.split.setOrientation(Qt.Orientation.Horizontal)
-            self.split.setSizes([max(400, 1280 - sizes.get("right", 360)), sizes.get("right", 360)])
+            self.split.setSizes([max(400, 1280 - self._history_sizes["right"]), self._history_sizes["right"]])
+
+    def _set_history_visible(self, opened: bool) -> None:
+        self.set_history_layout(self._history_position, opened, self._history_sizes)
+        self.history_panel_toggled.emit(opened)
 
     def show_comment_tooltip(self, text: str | None) -> None:
         if text:
@@ -493,22 +602,8 @@ class TablePage(QWidget):
             self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
 
     def _fill_sheets(self) -> None:
-        self.sheet_bar.blockSignals(True)
-        while self.sheet_bar.count():
-            self.sheet_bar.removeTab(0)
-        current_id = (self.workbook or {}).get("id")
-        current_index = 0
-        for index, sheet in enumerate(self.sheets):
-            name = sheet.get("name") or ""
-            if sheet.get("is_primary"):
-                name = f"{name} · основной"
-            self.sheet_bar.addTab(name)
-            self.sheet_bar.setTabData(index, sheet.get("id"))
-            if sheet.get("id") == current_id:
-                current_index = index
-        if self.sheets:
-            self.sheet_bar.setCurrentIndex(current_index)
-        self.sheet_bar.blockSignals(False)
+        self.sheet_bar.setProperty("busy", self.busy)
+        self.sheet_bar.set_sheets(self.sheets, (self.workbook or {}).get("id"))
 
     def _fill_columns(self) -> None:
         current = self.column_combo.currentData()
@@ -523,69 +618,112 @@ class TablePage(QWidget):
         self._column_picked()
         self.column_combo.blockSignals(False)
 
+    def apply_cell(self, cell: dict, unsaved: list[dict] | None = None) -> None:
+        if unsaved is not None:
+            self.unsaved = unsaved
+        param = cell.get("parameter_key")
+        column = cell.get("column_key")
+        if not param or not column:
+            self._refresh_hints()
+            return
+        self._cells[f"{param}:{column}"] = cell
+        text = cell.get("display") or cell.get("draft_value") or cell.get("value") or ""
+        parameters = (self.catalog or {}).get("parameters") or []
+        columns = (self.catalog or {}).get("columns") or []
+        row = next((index for index, item in enumerate(parameters) if item.get("key") == param), -1)
+        col = next((index for index, item in enumerate(columns) if item.get("key") == column), -1)
+        if row < 0 or col < 0:
+            self._refresh_hints()
+            return
+        item = self.table.item(row, 2 + col)
+        if item is None:
+            self._refresh_hints()
+            return
+        self.table.blockSignals(True)
+        try:
+            if item.text() != str(text):
+                item.setText(str(text))
+            color = _status_color(cell, parameters[row].get("row_kind") or "editable")
+            item.setBackground(QBrush(color) if color else QBrush())
+            self._decorate_cell_item(item, cell, selected=self._selected == (param, column))
+            if self._selected == (param, column):
+                self.discard_btn.setEnabled(cell.get("status") == "draft")
+                self._show_cell_link(cell)
+        finally:
+            self.table.blockSignals(False)
+        self._refresh_hints()
+
     def _rebuild_table(self) -> None:
         catalog = self.catalog
         self._rebuilding = True
-        self.table.clear()
-        if not catalog:
-            self.table.setRowCount(0)
-            self.table.setColumnCount(0)
+        self.table.blockSignals(True)
+        try:
+            self.table.clear()
+            if not catalog:
+                self.table.setRowCount(0)
+                self.table.setColumnCount(0)
+                return
+            columns = catalog.get("columns") or []
+            parameters = catalog.get("parameters") or []
+            self.table.setColumnCount(2 + len(columns))
+            self.table.setRowCount(len(parameters))
+            self.table.setHorizontalHeaderLabels(["Наименование параметра", "Ед. изм."] + [col.get("label") or "" for col in columns])
+            header = self.table.horizontalHeader()
+            header.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+            header.resizeSection(0, 340)
+            header.resizeSection(1, 80)
+            header.setMinimumSectionSize(48)
+            self.table.verticalHeader().setDefaultSectionSize(22)
+            self.table.verticalHeader().setVisible(False)
+            for row, param in enumerate(parameters):
+                label = param.get("label") or ""
+                unit = param.get("unit") or ""
+                if unit and label.endswith(f", {unit}"):
+                    label = label[: -len(unit) - 2].strip()
+                name = QTableWidgetItem(("    " * int(param.get("indent") or 0)) + label)
+                name.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+                name.setData(PARAM_ROLE, param.get("key"))
+                name.setData(KIND_ROLE, "param")
+                name.setBackground(QBrush(QColor(SECTION_BG if param.get("row_kind") != "editable" else PARAM_BG)))
+                self.table.setItem(row, 0, name)
+                unit_item = QTableWidgetItem(unit if param.get("row_kind") == "editable" else "")
+                unit_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+                unit_item.setBackground(QBrush(QColor(SECTION_BG if param.get("row_kind") != "editable" else PARAM_BG)))
+                self.table.setItem(row, 1, unit_item)
+                for col_index, column in enumerate(columns):
+                    cell = self._cells.get(f"{param.get('key')}:{column.get('key')}")
+                    text = (cell or {}).get("display") or (cell or {}).get("draft_value") or (cell or {}).get("value") or ""
+                    item = QTableWidgetItem(str(text))
+                    flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+                    editable = (
+                        param.get("row_kind") == "editable"
+                        and not (cell or {}).get("locked")
+                        and not (cell or {}).get("unified")
+                        and not (self.workbook or {}).get("is_primary")
+                    )
+                    if editable:
+                        flags |= Qt.ItemFlag.ItemIsEditable
+                    item.setFlags(flags)
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    item.setData(PARAM_ROLE, param.get("key"))
+                    item.setData(COLUMN_ROLE, column.get("key"))
+                    item.setData(OPTIONS_ROLE, (cell or {}).get("options") or param.get("options") or [])
+                    item.setData(KIND_ROLE, "cell")
+                    color = _status_color(cell, param.get("row_kind") or "editable")
+                    if color:
+                        item.setBackground(QBrush(color))
+                    self._decorate_cell_item(item, cell)
+                    self.table.setItem(row, 2 + col_index, item)
+            self.table.resizeColumnsToContents()
+            header = self.table.horizontalHeader()
+            header.resizeSection(0, 340)
+            header.resizeSection(1, 80)
+            self.table.sync_frozen()
+            if self._selected:
+                self._apply_highlight(*self._selected)
+        finally:
+            self.table.blockSignals(False)
             self._rebuilding = False
-            return
-        columns = catalog.get("columns") or []
-        parameters = catalog.get("parameters") or []
-        self.table.setColumnCount(2 + len(columns))
-        self.table.setRowCount(len(parameters))
-        self.table.setHorizontalHeaderLabels(["Наименование параметра", "Ед. изм."] + [col.get("label") or "" for col in columns])
-        header = self.table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
-        header.resizeSection(0, 340)
-        header.resizeSection(1, 80)
-        header.setMinimumSectionSize(48)
-        self.table.verticalHeader().setDefaultSectionSize(22)
-        self.table.verticalHeader().setVisible(False)
-        for row, param in enumerate(parameters):
-            label = param.get("label") or ""
-            unit = param.get("unit") or ""
-            if unit and label.endswith(f", {unit}"):
-                label = label[: -len(unit) - 2].strip()
-            name = QTableWidgetItem(("    " * int(param.get("indent") or 0)) + label)
-            name.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
-            name.setData(PARAM_ROLE, param.get("key"))
-            name.setData(KIND_ROLE, "param")
-            name.setBackground(QBrush(QColor(SECTION_BG if param.get("row_kind") != "editable" else PARAM_BG)))
-            self.table.setItem(row, 0, name)
-            unit_item = QTableWidgetItem(unit if param.get("row_kind") == "editable" else "")
-            unit_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
-            unit_item.setBackground(QBrush(QColor(SECTION_BG if param.get("row_kind") != "editable" else PARAM_BG)))
-            self.table.setItem(row, 1, unit_item)
-            for col_index, column in enumerate(columns):
-                cell = self._cells.get(f"{param.get('key')}:{column.get('key')}")
-                text = (cell or {}).get("display") or (cell or {}).get("draft_value") or (cell or {}).get("value") or ""
-                item = QTableWidgetItem(str(text))
-                flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
-                editable = (
-                    param.get("row_kind") == "editable"
-                    and not (cell or {}).get("locked")
-                    and not (cell or {}).get("unified")
-                    and not (self.workbook or {}).get("is_primary")
-                )
-                if editable:
-                    flags |= Qt.ItemFlag.ItemIsEditable
-                item.setFlags(flags)
-                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                item.setData(PARAM_ROLE, param.get("key"))
-                item.setData(COLUMN_ROLE, column.get("key"))
-                item.setData(OPTIONS_ROLE, (cell or {}).get("options") or param.get("options") or [])
-                item.setData(KIND_ROLE, "cell")
-                color = _status_color(cell, param.get("row_kind") or "editable")
-                if color:
-                    item.setBackground(QBrush(color))
-                self.table.setItem(row, 2 + col_index, item)
-        self.table.resizeColumnsToContents()
-        self._rebuilding = False
-        if self._selected:
-            self._select_keys(*self._selected, emit=False)
 
     def _keys_at(self, row: int, column: int) -> tuple[str, str] | None:
         item = self.table.item(row, column)
@@ -605,7 +743,10 @@ class TablePage(QWidget):
         self._selected = (parameter_key, column_key)
         self._apply_highlight(parameter_key, column_key)
         cell = self._cells.get(f"{parameter_key}:{column_key}") or {}
+        self.link_edit.blockSignals(True)
         self.link_edit.setText(cell.get("hyperlink") or "")
+        self.link_edit.blockSignals(False)
+        self._show_cell_link(cell)
         param = next((item for item in (self.catalog or {}).get("parameters") or [] if item.get("key") == parameter_key), None)
         col = next((item for item in (self.catalog or {}).get("columns") or [] if item.get("key") == column_key), None)
         unit = (param or {}).get("unit") or ""
@@ -634,34 +775,52 @@ class TablePage(QWidget):
         columns = catalog.get("columns") or []
         sel_row = next((i for i, item in enumerate(parameters) if item.get("key") == parameter_key), -1)
         sel_col = next((i for i, item in enumerate(columns) if item.get("key") == column_key), -1)
-        for row, param in enumerate(parameters):
-            for col in range(self.table.columnCount()):
-                item = self.table.item(row, col)
-                if not item:
-                    continue
-                cell = None
-                if col >= 2:
-                    cell = self._cells.get(f"{param.get('key')}:{columns[col - 2].get('key')}")
-                color = _status_color(cell, param.get("row_kind") or "editable") if col >= 2 else (
-                    QColor(COMPUTED) if param.get("row_kind") != "editable" else None
-                )
-                if row == sel_row or (col >= 2 and col - 2 == sel_col):
-                    if color is None:
-                        color = QColor(HIGHLIGHT)
-                if color:
-                    item.setBackground(QBrush(color))
-                else:
-                    item.setBackground(QBrush())
-                if row == sel_row and col >= 2 and col - 2 == sel_col:
-                    item.setForeground(QBrush(QColor(PRIMARY)))
+        blocked = self.table.signalsBlocked()
+        self.table.blockSignals(True)
+        try:
+            for row, param in enumerate(parameters):
+                for col in range(self.table.columnCount()):
+                    item = self.table.item(row, col)
+                    if not item:
+                        continue
+                    cell = None
+                    if col >= 2:
+                        cell = self._cells.get(f"{param.get('key')}:{columns[col - 2].get('key')}")
+                    if col < 2:
+                        color = QColor(SECTION_BG if param.get("row_kind") != "editable" else PARAM_BG)
+                    else:
+                        color = _status_color(cell, param.get("row_kind") or "editable")
+                    if row == sel_row or (col >= 2 and col - 2 == sel_col):
+                        if color is None:
+                            color = QColor(HIGHLIGHT)
+                    if color:
+                        item.setBackground(QBrush(color))
+                    else:
+                        item.setBackground(QBrush())
+                    selected = row == sel_row and col >= 2 and col - 2 == sel_col
+                    if col >= 2:
+                        self._decorate_cell_item(item, cell, selected=selected)
+                    else:
+                        item.setForeground(QBrush(QColor("#263238")))
+                    if col < 2:
+                        self.table.paint_frozen_item(row, col, item)
+        finally:
+            self.table.blockSignals(blocked)
 
     def _cell_entered(self, row: int, column: int) -> None:
         keys = self._keys_at(row, column)
-        if keys:
+        if keys and keys != self._hover_keys:
+            self._hover_keys = keys
             self.last_comment_needed.emit(*keys)
 
     def _cell_clicked(self, row: int, column: int) -> None:
         keys = self._keys_at(row, column)
+        if keys and QApplication.keyboardModifiers() & Qt.KeyboardModifier.ControlModifier:
+            cell = self._cells.get(f"{keys[0]}:{keys[1]}") or {}
+            if cell.get("hyperlink"):
+                self._open_hyperlink(str(cell["hyperlink"]))
+                self._select_keys(*keys)
+                return
         if not keys:
             parameters = (self.catalog or {}).get("parameters") or []
             if 0 <= row < len(parameters):
@@ -693,27 +852,81 @@ class TablePage(QWidget):
             self._select_keys(*keys)
 
     def _item_changed(self, item: QTableWidgetItem) -> None:
-        if self._rebuilding or self.table_mode != "edit":
+        if self._rebuilding or self.table.signalsBlocked() or self.table_mode != "edit":
             return
         param = item.data(PARAM_ROLE)
         column = item.data(COLUMN_ROLE)
         if not param or not column:
             return
+        current = self._cells.get(f"{param}:{column}") or {}
+        text = item.text()
+        previous = current.get("display") or current.get("draft_value") or current.get("value") or ""
         hyperlink = self.link_edit.text().strip() or None
-        self.draft_requested.emit(str(param), str(column), item.text(), hyperlink)
+        if text == previous and hyperlink == (current.get("hyperlink") or None):
+            return
+        self.draft_requested.emit(str(param), str(column), text, hyperlink)
+
+    def _cell_value(self, parameter_key: str, column_key: str) -> str:
+        cell = self._cells.get(f"{parameter_key}:{column_key}") or {}
+        parameters = (self.catalog or {}).get("parameters") or []
+        columns = (self.catalog or {}).get("columns") or []
+        row = next((index for index, item in enumerate(parameters) if item.get("key") == parameter_key), -1)
+        col = next((index for index, item in enumerate(columns) if item.get("key") == column_key), -1)
+        item = self.table.item(row, 2 + col) if row >= 0 and col >= 0 else None
+        if item:
+            return item.text()
+        return cell.get("display") or cell.get("draft_value") or cell.get("value") or ""
+
+    def _commit_editor(self) -> None:
+        if self.table.state() == QAbstractItemView.State.EditingState:
+            editor = self.table.focusWidget()
+            self.table.setFocus()
+            if editor is not None and editor is not self.table:
+                editor.clearFocus()
+            QApplication.processEvents()
+
+    def _has_drafts(self) -> bool:
+        if self.unsaved:
+            return True
+        return any((cell or {}).get("status") == "draft" for cell in self._cells.values())
+
+    def _can_save_draft(self, parameter_key: str, column_key: str) -> bool:
+        if not self.can_write or (self.workbook or {}).get("is_primary"):
+            return False
+        cell = self._cells.get(f"{parameter_key}:{column_key}") or {}
+        if cell.get("locked") or cell.get("unified"):
+            return False
+        if cell.get("status") == "draft":
+            return True
+        if any(
+            item.get("parameter_key") == parameter_key and item.get("column_key") == column_key
+            for item in self.unsaved
+        ):
+            return True
+        return self._cell_value(parameter_key, column_key) != (
+            cell.get("display") or cell.get("draft_value") or cell.get("value") or ""
+        )
 
     def _confirm(self) -> None:
         if not self._selected:
             return
+        self._commit_editor()
         param, column = self._selected
-        cell = self._cells.get(f"{param}:{column}") or {}
-        value = cell.get("display") or cell.get("draft_value") or cell.get("value") or ""
-        row = self.table.currentRow()
-        col = self.table.currentColumn()
-        item = self.table.item(row, col) if row >= 0 and col >= 0 else None
-        if item and item.data(PARAM_ROLE) == param:
-            value = item.text()
-        self.confirm_requested.emit(param, column, value, self.comment_edit.toPlainText().strip(), self.link_edit.text().strip() or None)
+        comment = self.comment_edit.text().strip() or self.cell_comment.toPlainText().strip()
+        if not comment:
+            self._start_draft_save(param, column)
+            return
+        self.confirm_requested.emit(
+            param,
+            column,
+            self._cell_value(param, column),
+            comment,
+            self.link_edit.text().strip() or None,
+        )
+        self.comment_edit.clear()
+        self.cell_comment.clear()
+        self.comment_box.hide()
+        self._draft_save_target = None
 
     def _discard(self) -> None:
         if self._selected:
@@ -727,8 +940,11 @@ class TablePage(QWidget):
         self.unify_requested.emit(param, column, not bool(cell.get("unified")))
 
     def _toggle_structure(self) -> None:
-        self.structure_edit = not self.structure_edit
-        self.structure_box.setVisible(self.structure_edit)
+        if not self.structure_edit:
+            self._open_header_structure()
+            return
+        self.structure_edit = False
+        self.structure_panel.hide()
         self._refresh_hints()
 
     def _param_key(self) -> str:
@@ -803,58 +1019,242 @@ class TablePage(QWidget):
             self.add_column_requested.emit(label)
             self.new_column.clear()
 
-    def _sheet_changed(self, index: int) -> None:
-        sheet_id = self.sheet_bar.tabData(index)
+    def _sheet_writable(self) -> bool:
+        return bool(self.can_write and not self.busy and not (self.workbook or {}).get("is_primary"))
+
+    def _column_key_at(self, logical_index: int) -> str | None:
+        columns = (self.catalog or {}).get("columns") or []
+        index = logical_index - 2
+        if 0 <= index < len(columns):
+            return str(columns[index].get("key") or "") or None
+        return None
+
+    def _select_header_column(self, key: str) -> None:
+        index = self.column_combo.findData(key)
+        if index >= 0:
+            self.column_combo.setCurrentIndex(index)
+            self._column_picked()
+
+    def _open_header_structure(self) -> None:
+        if not self._sheet_writable():
+            return
+        self.set_mode("edit")
+        self.structure_edit = True
+        self.structure_panel.show()
+        self._refresh_hints()
+
+    def _header_clicked(self, index: int) -> None:
+        key = self._column_key_at(index)
+        if key:
+            self._select_header_column(key)
+
+    def _header_double_clicked(self, index: int) -> None:
+        key = self._column_key_at(index)
+        if key:
+            self._rename_header_column(key)
+
+    def _header_menu(self, index: int, global_pos) -> None:
+        menu = QMenu(self)
+        writable = self._sheet_writable()
+        key = self._column_key_at(index)
+        edit = menu.addAction("Редактировать структуру шапки", self._open_header_structure)
+        edit.setEnabled(writable)
+        if key:
+            column = next((item for item in (self.catalog or {}).get("columns") or [] if item.get("key") == key), None)
+            rename = menu.addAction(
+                f"Переименовать «{(column or {}).get('label') or key}»…",
+                lambda: self._rename_header_column(key),
+            )
+            rename.setEnabled(writable)
+            delete = menu.addAction("Удалить столбец", lambda: self._delete_header_column(key))
+            delete.setEnabled(writable)
+        add = menu.addAction("Добавить столбец…", self._prompt_add_column)
+        add.setEnabled(writable)
+        menu.exec(global_pos)
+
+    def _rename_header_column(self, key: str) -> None:
+        if not self._sheet_writable():
+            return
+        column = next((item for item in (self.catalog or {}).get("columns") or [] if item.get("key") == key), None)
+        text, ok = QInputDialog.getText(
+            self,
+            "Столбец шапки",
+            "Наименование столбца",
+            QLineEdit.EchoMode.Normal,
+            (column or {}).get("label") or "",
+        )
+        if ok and text.strip():
+            self.update_column_requested.emit(key, text.strip())
+
+    def _prompt_add_column(self) -> None:
+        if not self._sheet_writable():
+            return
+        text, ok = QInputDialog.getText(self, "Новый столбец", "Наименование столбца")
+        if ok and text.strip():
+            self.add_column_requested.emit(text.strip())
+
+    def _delete_header_column(self, key: str) -> None:
+        self._select_header_column(key)
+        self.delete_column_requested.emit(key)
+
+    def _decorate_cell_item(self, item: QTableWidgetItem, cell: dict | None, selected: bool = False) -> None:
+        font = item.font()
+        has_link = bool((cell or {}).get("hyperlink"))
+        font.setUnderline(has_link)
+        item.setFont(font)
+        if selected or has_link:
+            item.setForeground(QBrush(QColor(PRIMARY)))
+        else:
+            item.setForeground(QBrush(QColor("#263238")))
+        item.setToolTip(str((cell or {}).get("hyperlink") or ""))
+
+    def _show_cell_link(self, cell: dict | None) -> None:
+        url = str((cell or {}).get("hyperlink") or "").strip()
+        if not url:
+            self.link_view.hide()
+            self.link_view.clear()
+            return
+        safe = escape(url, quote=True)
+        self.link_view.setText(f'Ссылка: <a href="{safe}">{safe}</a>')
+        self.link_view.show()
+
+    def _save_link_draft(self) -> None:
+        if not self._selected or self.table_mode != "edit" or not self._sheet_writable():
+            return
+        param, column = self._selected
+        cell = self._cells.get(f"{param}:{column}") or {}
+        hyperlink = self.link_edit.text().strip() or None
+        if hyperlink == (cell.get("hyperlink") or None):
+            return
+        self.draft_requested.emit(param, column, self._cell_value(param, column), hyperlink)
+
+    def _edit_hyperlink(self, parameter_key: str, column_key: str) -> None:
+        if not self._sheet_writable():
+            return
+        self.set_mode("edit")
+        self._select_keys(parameter_key, column_key)
+        self._set_history_visible(True)
+        cell = self._cells.get(f"{parameter_key}:{column_key}") or {}
+        text, ok = QInputDialog.getText(
+            self,
+            "Ссылка в ячейке",
+            "Ссылка на документ",
+            QLineEdit.EchoMode.Normal,
+            cell.get("hyperlink") or "",
+        )
+        if ok:
+            self._set_hyperlink(parameter_key, column_key, text.strip() or None)
+
+    def _set_hyperlink(self, parameter_key: str, column_key: str, hyperlink: str | None) -> None:
+        self.draft_requested.emit(parameter_key, column_key, self._cell_value(parameter_key, column_key), hyperlink)
+
+    def _open_hyperlink(self, url: str) -> None:
+        target = (url or "").strip()
+        if not target:
+            return
+        QDesktopServices.openUrl(QUrl.fromUserInput(target))
+
+    def _sheet_changed(self, sheet_id: str) -> None:
         if sheet_id and sheet_id != (self.workbook or {}).get("id"):
             self.sheet_selected.emit(str(sheet_id))
 
-    def _sheet_menu(self, pos) -> None:
-        index = self.sheet_bar.tabAt(pos)
-        if index < 0:
-            return
-        sheet_id = str(self.sheet_bar.tabData(index) or "")
+    def _sheet_menu_at(self, sheet_id: str, global_pos) -> None:
         sheet = next((item for item in self.sheets if item.get("id") == sheet_id), None)
         if not sheet:
             return
         menu = QMenu(self)
-        menu.addAction("Копировать лист", lambda: self.sheet_copy_requested.emit(sheet_id))
-        menu.addAction("Переименовать", lambda: self.sheet_rename_requested.emit(sheet_id))
+        writable = self.can_write and not self.busy
+        rename = menu.addAction("Переименовать лист", lambda: self.sheet_rename_requested.emit(sheet_id))
+        rename.setEnabled(writable and not sheet.get("is_primary"))
         if sheet.get("is_primary"):
-            menu.addAction("Снять статус основного", lambda: self.sheet_ordinary_requested.emit(sheet_id))
+            ordinary = menu.addAction("Сделать обычным листом", lambda: self.sheet_ordinary_requested.emit(sheet_id))
+            ordinary.setEnabled(writable)
         else:
-            menu.addAction("Сделать основным", lambda: self.sheet_primary_requested.emit(sheet_id))
-        root_id = (self.workbook or {}).get("parent_workbook_id") or (self.workbook or {}).get("id")
-        if sheet_id != root_id:
-            menu.addAction("Удалить лист", lambda: self.sheet_delete_requested.emit(sheet_id))
-        menu.exec(self.sheet_bar.mapToGlobal(pos))
+            primary = menu.addAction("Сделать основным", lambda: self.sheet_primary_requested.emit(sheet_id))
+            primary.setEnabled(writable)
+        copy = menu.addAction("Копировать лист", lambda: self.sheet_copy_requested.emit(sheet_id))
+        copy.setEnabled(writable)
+        delete = menu.addAction("Удалить лист", lambda: self.sheet_delete_requested.emit(sheet_id))
+        delete.setEnabled(writable and len(self.sheets) > 1)
+        menu.exec(global_pos)
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802
+        if event.type() == QEvent.Type.ContextMenu and self.history_panel.isVisible():
+            if watched in {self.history_table, self.history_table.viewport()}:
+                return super().eventFilter(watched, event)
+            if (watched is self.history_panel or self.history_panel.isAncestorOf(watched)) and not isinstance(
+                watched, (QLineEdit, QPlainTextEdit)
+            ):
+                global_pos = event.globalPosition().toPoint() if hasattr(event, "globalPosition") else event.globalPos()
+                self._exec_history_menu(global_pos)
+                return True
+        return super().eventFilter(watched, event)
+
+    def _exec_history_menu(self, global_pos) -> None:
+        menu = QMenu(self)
+        menu.addAction("Скрыть историю", lambda: self._set_history_visible(False))
+        menu.exec(global_pos)
+
+    def _history_menu(self, pos) -> None:
+        if not self.history_panel.isVisible():
+            return
+        sender = self.sender()
+        origin = sender.mapToGlobal(pos) if sender is not None else self.history_panel.mapToGlobal(pos)
+        self._exec_history_menu(origin)
+
+    def _frozen_menu(self, global_pos) -> None:
+        index = self.table.frozen.indexAt(self.table.frozen.viewport().mapFromGlobal(global_pos))
+        self._show_table_menu(index.row(), index.column(), global_pos)
 
     def _cell_menu(self, pos) -> None:
         item = self.table.itemAt(pos)
-        if not item:
-            return
-        param = item.data(PARAM_ROLE)
-        column = item.data(COLUMN_ROLE)
-        if not param or not column:
-            return
-        self._select_keys(str(param), str(column))
-        cell = self._cells.get(f"{param}:{column}") or {}
-        locked = bool(cell.get("locked") or cell.get("unified") or (self.workbook or {}).get("is_primary"))
+        row = item.row() if item else self.table.indexAt(pos).row()
+        column = item.column() if item else self.table.indexAt(pos).column()
+        self._show_table_menu(row, column, self.table.viewport().mapToGlobal(pos))
+
+    def _show_table_menu(self, row: int, column: int, global_pos) -> None:
+        keys = self._keys_at(row, column) if row >= 0 and column >= 0 else None
         menu = QMenu(self)
-        edit_act = menu.addAction("Изменить данные в ячейке", lambda: self._start_edit(str(param), str(column)))
+        if not keys:
+            menu.addAction("Найти в таблице", self._open_find)
+            if self.history_panel.isVisible():
+                menu.addAction("Скрыть историю", lambda: self._set_history_visible(False))
+            else:
+                menu.addAction("Показать историю", lambda: self._set_history_visible(True))
+            menu.exec(global_pos)
+            return
+        param, col_key = keys
+        self._select_keys(param, col_key)
+        cell = self._cells.get(f"{param}:{col_key}") or {}
+        locked = bool(cell.get("locked") or cell.get("unified") or (self.workbook or {}).get("is_primary"))
+        edit_act = menu.addAction("Изменить данные в ячейке", lambda: self._start_edit(param, col_key))
         edit_act.setEnabled(self.can_write and not locked and not self.busy)
         menu.addAction("Найти в таблице", self._open_find)
-        menu.addAction("Показать историю", lambda: self.history_panel_toggled.emit(True) or self._select_keys(str(param), str(column)))
+        if self.history_panel.isVisible():
+            menu.addAction("Скрыть историю", lambda: self._set_history_visible(False))
+        menu.addAction("Показать историю", lambda: self._show_history_for(param, col_key))
         unify = QAction("Снять унификацию" if cell.get("unified") else "Установить унификацию", self)
         unify.triggered.connect(self._unify)
         unify.setEnabled(self.can_write and not (self.workbook or {}).get("is_primary") and not self.busy)
         menu.addAction(unify)
+        link_label = "Изменить ссылку…" if cell.get("hyperlink") else "Добавить ссылку…"
+        link_act = menu.addAction(link_label, lambda: self._edit_hyperlink(param, col_key))
+        link_act.setEnabled(self.can_write and not locked and not self.busy)
+        if cell.get("hyperlink"):
+            menu.addAction("Открыть ссылку", lambda: self._open_hyperlink(str(cell.get("hyperlink"))))
+            clear_link = menu.addAction("Удалить ссылку", lambda: self._set_hyperlink(param, col_key, None))
+            clear_link.setEnabled(self.can_write and not locked and not self.busy)
         comment_act = menu.addAction("Оставить комментарий", self._open_comment)
         comment_act.setEnabled(self.can_write and not cell.get("locked") and not (self.workbook or {}).get("is_primary"))
-        save_act = menu.addAction("Сохранить черновик", self._confirm)
-        save_act.setEnabled(self.can_write and cell.get("status") == "draft")
-        all_act = menu.addAction("Сохранить все черновики", self.save_all_drafts_requested.emit)
-        all_act.setEnabled(bool(self.unsaved) and self.can_write)
-        menu.exec(self.table.viewport().mapToGlobal(pos))
+        save_act = menu.addAction("Сохранить черновик", lambda: self._start_draft_save(param, col_key))
+        save_act.setEnabled(self._can_save_draft(param, col_key) and not self.busy)
+        all_act = menu.addAction("Сохранить все черновики", lambda: self.save_all_drafts_requested.emit())
+        all_act.setEnabled(self._has_drafts() and self.can_write)
+        menu.exec(global_pos)
+
+    def _show_history_for(self, parameter_key: str, column_key: str) -> None:
+        self._set_history_visible(True)
+        self._select_keys(parameter_key, column_key)
 
     def _start_edit(self, parameter_key: str, column_key: str) -> None:
         self.set_mode("edit")
@@ -865,19 +1265,52 @@ class TablePage(QWidget):
             self.table.editItem(self.table.item(row, col))
 
     def _open_comment(self) -> None:
-        self.comment_box.show()
+        self._draft_save_target = None
+        self._set_history_visible(True)
         self.comment_label.setText("Комментарий к ячейке")
+        self.add_comment_btn.setText("Добавить комментарий")
+        self.comment_box.show()
         self.cell_comment.setFocus()
 
-    def _submit_comment(self) -> None:
-        if not self._selected:
-            return
-        text = self.cell_comment.toPlainText().strip()
-        if not text:
-            return
-        self.comment_requested.emit(*self._selected, text)
+    def _start_draft_save(self, parameter_key: str, column_key: str) -> None:
+        self._commit_editor()
+        self.set_mode("edit")
+        self._select_keys(parameter_key, column_key)
+        self._draft_save_target = (parameter_key, column_key)
+        self._set_history_visible(True)
+        self.comment_label.setText("Комментарий для сохранения черновика")
+        self.add_comment_btn.setText("Сохранить черновик")
+        self.comment_box.show()
+        self.cell_comment.clear()
+        self.cell_comment.setFocus()
+
+    def _cancel_comment(self) -> None:
+        self._draft_save_target = None
         self.cell_comment.clear()
         self.comment_box.hide()
+        self.add_comment_btn.setText("Добавить комментарий")
+
+    def _submit_comment(self) -> None:
+        text = self.cell_comment.toPlainText().strip()
+        if not text:
+            self.cell_comment.setFocus()
+            return
+        if self._draft_save_target:
+            param, column = self._draft_save_target
+            self.confirm_requested.emit(
+                param,
+                column,
+                self._cell_value(param, column),
+                text,
+                self.link_edit.text().strip() or None,
+            )
+            self._cancel_comment()
+            self.comment_edit.clear()
+            return
+        if not self._selected:
+            return
+        self.comment_requested.emit(*self._selected, text)
+        self._cancel_comment()
 
     def _open_find(self) -> None:
         self.find_bar.show()

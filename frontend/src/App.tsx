@@ -358,7 +358,7 @@ export default function App() {
     if (!workbook || !canWrite) return
     const rootWorkbookId = workbook.parent_workbook_id || workbook.id
     const target = sheetItems.find((sheet) => sheet.id === sheetId)
-    if (!target || sheetId === rootWorkbookId) return
+    if (!target || sheetItems.length <= 1) return
     if (sheetId === workbook.id && unsaved.length > 0) {
       setError('Сначала сохраните или отмените черновики текущего листа.')
       return
@@ -369,7 +369,7 @@ export default function App() {
     try {
       const result = await api.deleteSheet(rootWorkbookId, sheetId)
       setSheetItems(result.sheets)
-      if (workbook.id === sheetId) {
+      if (workbook.id === sheetId || sheetId === rootWorkbookId) {
         await loadSheetData(result.active_sheet_id)
       } else {
         const revision = await api.workbookRevision(rootWorkbookId)

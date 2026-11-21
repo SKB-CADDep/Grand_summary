@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, QSize, Qt, pyqtSignal
+from PyQt6.QtGui import QFont, QFontMetrics
 from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -8,6 +9,8 @@ from PyQt6.QtWidgets import (
     QMenu,
     QPushButton,
     QSizePolicy,
+    QStyle,
+    QStyleOptionButton,
     QVBoxLayout,
     QWidget,
 )
@@ -133,8 +136,10 @@ class TabStrip(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("guide-tabs")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(20, 0, 14, 0)
+        layout.setContentsMargins(6, 0, 14, 0)
         layout.setSpacing(6)
         self.buttons: dict[str, QPushButton] = {}
         for key, label, obj in (
@@ -147,6 +152,12 @@ class TabStrip(QWidget):
             button.setProperty("tab", True)
             button.setCheckable(True)
             button.setAutoExclusive(True)
+            button.setFlat(True)
+            button.setAutoDefault(False)
+            button.setDefault(False)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+            button.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
             if obj:
                 button.setObjectName(obj)
             button.clicked.connect(lambda _=False, tab=key: self.tab_changed.emit(tab))
@@ -154,13 +165,59 @@ class TabStrip(QWidget):
             layout.addWidget(button)
         layout.addStretch(1)
         self.buttons["object"].setChecked(True)
+        self.buttons["object"].raise_()
         self.buttons["triangles"].hide()
+        self._fitting_tabs = False
+        self._fit_tab_buttons()
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        self._fit_tab_buttons()
+
+    def changeEvent(self, event) -> None:  # noqa: N802
+        super().changeEvent(event)
+        if event.type() in {QEvent.Type.FontChange, QEvent.Type.StyleChange, QEvent.Type.PaletteChange}:
+            self._fit_tab_buttons()
+
+    def _fit_tab_buttons(self) -> None:
+        if getattr(self, "_fitting_tabs", False):
+            return
+        self._fitting_tabs = True
+        try:
+            self._apply_tab_widths()
+        finally:
+            self._fitting_tabs = False
+
+    def _apply_tab_widths(self) -> None:
+        for button in self.buttons.values():
+            button.style().unpolish(button)
+            button.style().polish(button)
+            button.ensurePolished()
+            font = QFont(button.font())
+            font.setWeight(QFont.Weight.DemiBold)
+            metrics = QFontMetrics(font)
+            text_size = QSize(metrics.horizontalAdvance(button.text()), metrics.height())
+            option = QStyleOptionButton()
+            button.initStyleOption(option)
+            option.state |= QStyle.StateFlag.State_On
+            option.fontMetrics = metrics
+            option.text = button.text()
+            hint = button.style().sizeFromContents(
+                QStyle.ContentsType.CT_PushButton,
+                option,
+                text_size,
+                button,
+            )
+            button.setMinimumWidth(max(hint.width() + 8, text_size.width() + 48))
 
     def set_current(self, key: str) -> None:
         for name, button in self.buttons.items():
             button.blockSignals(True)
             button.setChecked(name == key)
             button.blockSignals(False)
+        selected = self.buttons.get(key)
+        if selected:
+            selected.raise_()
 
     def set_enabled(self, workbook: bool, triangles: bool) -> None:
         self.buttons["table"].setEnabled(workbook)
@@ -172,6 +229,7 @@ class TabStrip(QWidget):
 class Workspace(QFrame):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setObjectName("workspace-card")
         self.setProperty("card", True)
         self.layout_box = QVBoxLayout(self)
         self.layout_box.setContentsMargins(14, 14, 14, 14)

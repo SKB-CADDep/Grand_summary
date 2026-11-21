@@ -39,7 +39,7 @@ from desktop.ui.triangle_page import TrianglePage
 APP_TOUR = [
     {"title": "Меню и справка", "body": "Файл обновляет окно. Стрелки влево/вправо — отменить и повторить действия этой сессии (Ctrl+Z / Ctrl+Y), как в Word. Справка — инструкция и журналы. Кнопка «?» снова открывает обучение.", "target": "guide-menu"},
     {"title": "Три вкладки", "body": "Сначала объект и треугольники, затем таблица исходных данных, затем отчёт. Без выбранного объекта таблица и отчёт закрыты.", "target": "guide-tabs", "tab": "object"},
-    {"title": "Объект", "body": "Выберите турбину из списка. Если объекта нет — создайте его ниже или загрузите Excel.", "target": "guide-object", "tab": "object"},
+    {"title": "Объект", "body": "Начните вводить название — появится список подходящих объектов. Выберите нужный. Объекты берутся из каталога и в программе не создаются.", "target": "guide-object", "tab": "object"},
     {"title": "Треугольники", "body": "Файл тепловиков заполняет ячейки по подписи параметра и номеру ступени. Импорт создаёт версию 0.", "target": "guide-triangle", "tab": "object"},
     {"title": "Таблица ИД", "body": "Параметры в строках, ступени и КУ в колонках. Жёлтый — черновик, зелёный — сохранено с комментарием.", "target": "guide-tab-table", "tab": "table"},
     {"title": "Отчёт", "body": "Короткая служебка или полная сводка в Word. Комментарии в файл не попадают.", "target": "guide-tab-report", "tab": "report"},
@@ -124,15 +124,22 @@ class MainWindow(QMainWindow):
         self.error_label.hide()
         wrap.addWidget(self.error_label)
         wrap.addWidget(self.message_label)
+        tab_host = QWidget()
+        tab_host.setObjectName("tab-host")
+        tab_host_layout = QVBoxLayout(tab_host)
+        tab_host_layout.setContentsMargins(0, 0, 0, 0)
+        tab_host_layout.setSpacing(-1)
         self.tab_strip = TabStrip()
         self.tab_strip.tab_changed.connect(self._try_change_tab)
-        wrap.addWidget(self.tab_strip)
+        tab_host_layout.addWidget(self.tab_strip)
         self.workspace = Workspace()
         self.stack = QStackedWidget()
         for key in ("object", "table", "triangles", "report"):
             self.stack.addWidget(self.pages[key])
         self.workspace.layout_box.addWidget(self.stack)
-        wrap.addWidget(self.workspace, 1)
+        tab_host_layout.addWidget(self.workspace, 1)
+        self.tab_strip.raise_()
+        wrap.addWidget(tab_host, 1)
         shell_layout.addWidget(workspace_wrap, 1)
         self.setCentralWidget(shell)
         self.menuBar().hide()
@@ -154,7 +161,6 @@ class MainWindow(QMainWindow):
 
     def _connect_pages(self) -> None:
         self.object_page.object_selected.connect(self.select_object)
-        self.object_page.object_create_requested.connect(self.create_object)
         self.object_page.import_parameters_requested.connect(self._import_workbook)
         self.object_page.import_triangle_requested.connect(self._import_triangle)
         self.triangle_page.catalog_needed.connect(self._triangle_catalog)
@@ -253,7 +259,9 @@ class MainWindow(QMainWindow):
         )
         self.report_page.set_sheets(self.sheets, (self.workbook or {}).get("id"))
         if self.workbook and self.catalog:
-            self.report_page.set_table_data(self.catalog, self.workbook.get("cells") or [], self.busy)
+            self.report_page.set_table_data(
+                self.catalog, self.workbook.get("cells") or [], self.busy, self.workbook.get("id")
+            )
         self._refresh_history_actions()
         self.chrome.set_history_prefs(self.history_panel_open, self.history_position)
 
@@ -271,25 +279,21 @@ class MainWindow(QMainWindow):
 
     def select_object(self, object_id: str) -> None:
         self.selected_id = object_id
+        if not object_id:
+            self.workbook = None
+            self.catalog = None
+            self.unsaved = []
+            self.sheets = []
+            self.triangles = []
+            self.undo_stack.clear()
+            self.redo_stack.clear()
+            self._refresh_pages()
+            return
         self._set_busy(True)
         try:
             opened = self.client.open_workbook(object_id)
             self._load_sheet_tree(opened.get("id"), opened.get("id"))
             self._info("Сводка открыта")
-        except Exception as exc:
-            self._fail(exc)
-        finally:
-            self._set_busy(False)
-
-    def create_object(self, payload: dict) -> None:
-        self._set_busy(True)
-        try:
-            created = self.client.create_object(payload)
-            self.objects = self.client.objects()
-            self.selected_id = created["id"]
-            opened = self.client.open_workbook(created["id"])
-            self._load_sheet_tree(opened.get("id"), opened.get("id"))
-            self._info("Объект добавлен в общий каталог")
         except Exception as exc:
             self._fail(exc)
         finally:
@@ -402,8 +406,8 @@ class MainWindow(QMainWindow):
             result = self.client.delete_sheet(self._root_id() or sheet_id, sheet_id)
             self.sheets = result.get("sheets") or []
             active = result.get("active_sheet_id")
-            if self.workbook and self.workbook.get("id") == sheet_id and active:
-                self._load_sheet_tree(self._root_id() or active, active)
+            if active and (not self.workbook or self.workbook.get("id") == sheet_id or sheet_id == self._root_id()):
+                self._load_sheet_tree(active, active)
             else:
                 self._reload_current()
         except Exception as exc:
@@ -415,29 +419,14 @@ class MainWindow(QMainWindow):
         if not self.workbook:
             return
         if self.unsaved:
-            dialog = UnsavedDialog(self.unsaved, self)
-            if dialog.exec():
-                for item, action, comment in dialog.results():
-                    try:
-                        if action == "confirm":
-                            if not comment.strip():
-                                self._fail(Exception("Укажите комментарий для каждой подтверждаемой ячейки."))
-                                return
-                            self.client.confirm_cell(
-                                self.workbook["id"],
-                                item["parameter_key"],
-                                item["column_key"],
-                                {
-                                    "value": item.get("draft_value") or item.get("value") or "",
-                                    "comment": comment,
-                                    "expected_updated_at": expected_at(self.workbook, item["parameter_key"], item["column_key"]),
-                                },
-                            )
-                        elif action == "discard":
-                            self.client.discard_cell(self.workbook["id"], item["parameter_key"], item["column_key"])
-                    except Exception as exc:
-                        self._handle(exc)
-                        return
+            dialog = UnsavedDialog(
+                self.unsaved,
+                self,
+                on_save=self._confirm_unsaved_row,
+                on_discard=self._discard_unsaved_row,
+            )
+            if not dialog.exec():
+                return
         self._set_busy(True)
         try:
             result = self.client.save_project(self._root_id() or self.workbook["id"])
@@ -451,16 +440,22 @@ class MainWindow(QMainWindow):
     def _import_workbook(self) -> None:
         if not self.workbook or not self.can_write:
             return
+        if self.unsaved:
+            self._fail(Exception("Сначала сохраните или отмените черновики текущего листа."))
+            return
         path, _ = QFileDialog.getOpenFileName(self, "Импортировать Excel", "", "Excel (*.xlsx)")
         if not path:
             return
         self._set_busy(True)
         try:
-            result = self.client.import_workbook(self.workbook["id"], Path(path))
+            root_id = self._root_id() or self.workbook["id"]
+            result = self.client.import_workbook(root_id, Path(path))
             self.sheets = result.get("sheets") or self.sheets
             active = result.get("active_sheet_id") or self.workbook["id"]
-            self._load_sheet_tree(self._root_id() or active, active)
-            self._info(f"Импортировано значений: {result.get('imported') or 0}")
+            self.tab = "table"
+            self._load_sheet_tree(root_id, active)
+            imported = result.get("imported") or 0
+            self._info(f"Импортировано значений: {imported}")
         except Exception as exc:
             self._fail(exc)
         finally:
@@ -541,13 +536,15 @@ class MainWindow(QMainWindow):
         self.tab = "report"
         self._refresh_pages()
         if self.workbook and self.catalog:
-            self.report_page.set_table_data(self.catalog, self.workbook.get("cells") or [])
+            self.report_page.set_table_data(
+                self.catalog, self.workbook.get("cells") or [], sheet_id=self.workbook.get("id")
+            )
 
     def _load_report_sheet(self, sheet_id: str, _type: str) -> None:
         try:
             book = self.client.workbook(sheet_id)
             catalog = self.client.catalog(sheet_id)
-            self.report_page.set_table_data(catalog, book.get("cells") or [])
+            self.report_page.set_table_data(catalog, book.get("cells") or [], sheet_id=sheet_id)
         except Exception as exc:
             self._fail(exc)
 
@@ -562,7 +559,7 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self._fail(exc)
 
-    def _record(self, previous: dict, previous_catalog: dict | None, label: str, kind: str, keys: dict, next_book: dict, extra: dict | None = None) -> None:
+    def _record(self, previous: dict, previous_catalog: dict | None, label: str, kind: str, keys: dict, next_book: dict, extra: dict | None = None, cell: dict | None = None) -> None:
         before = take_snap(previous, previous_catalog)
         after = take_snap(next_book, self.catalog, extra)
         entry = {"label": label, "kind": kind, "parameterKey": keys.get("parameterKey"), "columnKey": keys.get("columnKey"), "before": before, "after": after}
@@ -582,6 +579,10 @@ class MainWindow(QMainWindow):
             self.unsaved = self.client.unsaved(next_book["id"])
         except Exception:
             pass
+        if cell is not None and self.tab == "table":
+            self.table_page.apply_cell(cell, self.unsaved)
+            self._refresh_history_actions()
+            return
         self._refresh_pages()
 
     def _draft(self, parameter_key: str, column_key: str, value: str, hyperlink) -> None:
@@ -597,7 +598,7 @@ class MainWindow(QMainWindow):
                 {"value": value, "hyperlink": hyperlink, "expected_updated_at": expected_at(self.workbook, parameter_key, column_key)},
             )
             next_book = workbook_with_cell(previous, cell)
-            self._record(previous, previous_catalog, "Ввод в ячейке", "draft", {"parameterKey": parameter_key, "columnKey": column_key}, next_book)
+            self._record(previous, previous_catalog, "Ввод в ячейке", "draft", {"parameterKey": parameter_key, "columnKey": column_key}, next_book, cell=cell)
         except Exception as exc:
             self._handle(exc)
 
@@ -641,7 +642,7 @@ class MainWindow(QMainWindow):
                 if last
                 else [],
             }
-            self._record(previous, previous_catalog, "Сохранение значения", "confirm", {"parameterKey": parameter_key, "columnKey": column_key}, next_book, extra)
+            self._record(previous, previous_catalog, "Сохранение значения", "confirm", {"parameterKey": parameter_key, "columnKey": column_key}, next_book, extra, cell=cell)
         except Exception as exc:
             self._handle(exc)
 
@@ -653,7 +654,7 @@ class MainWindow(QMainWindow):
         try:
             cell = self.client.discard_cell(self.workbook["id"], parameter_key, column_key)
             next_book = workbook_with_cell(previous, cell)
-            self._record(previous, previous_catalog, "Отмена черновика", "discard", {"parameterKey": parameter_key, "columnKey": column_key}, next_book)
+            self._record(previous, previous_catalog, "Отмена черновика", "discard", {"parameterKey": parameter_key, "columnKey": column_key}, next_book, cell=cell)
         except Exception as exc:
             self._handle(exc)
 
@@ -815,41 +816,73 @@ class MainWindow(QMainWindow):
         self.tab = next_tab
         self._refresh_pages()
 
+    def _confirm_unsaved_row(self, item: dict, comment: str) -> None:
+        if not self.workbook:
+            raise RuntimeError("Нет открытой сводки")
+        try:
+            cell = self.client.confirm_cell(
+                self.workbook["id"],
+                item["parameter_key"],
+                item["column_key"],
+                {
+                    "value": item.get("draft_value") or item.get("value") or "",
+                    "comment": comment,
+                    "expected_updated_at": expected_at(self.workbook, item["parameter_key"], item["column_key"]),
+                },
+            )
+        except Exception as exc:
+            self._handle(exc)
+            raise
+        self.workbook = workbook_with_cell(self.workbook, cell)
+        self.unsaved = [
+            row
+            for row in self.unsaved
+            if not (row.get("parameter_key") == item.get("parameter_key") and row.get("column_key") == item.get("column_key"))
+        ]
+        self.table_page.apply_cell(cell, self.unsaved)
+        self._refresh_history_actions()
+
+    def _discard_unsaved_row(self, item: dict) -> None:
+        if not self.workbook:
+            raise RuntimeError("Нет открытой сводки")
+        try:
+            cell = self.client.discard_cell(self.workbook["id"], item["parameter_key"], item["column_key"])
+        except Exception as exc:
+            self._handle(exc)
+            raise
+        self.workbook = workbook_with_cell(self.workbook, cell)
+        self.unsaved = [
+            row
+            for row in self.unsaved
+            if not (row.get("parameter_key") == item.get("parameter_key") and row.get("column_key") == item.get("column_key"))
+        ]
+        self.table_page.apply_cell(cell, self.unsaved)
+        self._refresh_history_actions()
+
     def _open_unsaved(self) -> None:
         if not self.unsaved or not self.workbook:
             return
-        dialog = UnsavedDialog(self.unsaved, self, allow_skip=bool(self.pending_tab))
-        result = dialog.exec()
+        dialog = UnsavedDialog(
+            self.unsaved,
+            self,
+            allow_skip=bool(self.pending_tab),
+            on_save=self._confirm_unsaved_row,
+            on_discard=self._discard_unsaved_row,
+        )
+        dialog.exec()
         if dialog.skipped and self.pending_tab:
             self.tab = self.pending_tab
             self.pending_tab = None
             self._refresh_pages()
             return
-        if not result:
-            self.pending_tab = None
-            return
-        for item, action, comment in dialog.results():
-            try:
-                if action == "confirm":
-                    self.client.confirm_cell(
-                        self.workbook["id"],
-                        item["parameter_key"],
-                        item["column_key"],
-                        {
-                            "value": item.get("draft_value") or item.get("value") or "",
-                            "comment": comment,
-                            "expected_updated_at": expected_at(self.workbook, item["parameter_key"], item["column_key"]),
-                        },
-                    )
-                elif action == "discard":
-                    self.client.discard_cell(self.workbook["id"], item["parameter_key"], item["column_key"])
-            except Exception as exc:
-                self._handle(exc)
-                return
+        self.pending_tab = None
+        try:
+            self.unsaved = self.client.unsaved(self.workbook["id"])
+        except Exception:
+            pass
         self._reload_current()
         if not self.unsaved and self.pending_tab:
             self.tab = self.pending_tab
-            self.pending_tab = None
             self._refresh_pages()
 
     def _refresh_application(self) -> None:
@@ -891,6 +924,7 @@ class MainWindow(QMainWindow):
     def _on_table_history_toggle(self, opened: bool) -> None:
         self.history_panel_open = opened
         self._save_history_prefs()
+        self.table_page.set_history_layout(self.history_position, self.history_panel_open, self.history_sizes)
         self.chrome.set_history_prefs(self.history_panel_open, self.history_position)
 
     def _load_history_prefs(self) -> None:

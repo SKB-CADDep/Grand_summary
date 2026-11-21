@@ -8,7 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import set_committed_value
 
-from backend.models import Cell, CellChange, Notification, ObjectItem, Version, Workbook
+from backend.models import Cell, CellChange, Notification, ObjectItem, TriangleSheet, Version, Workbook
 from src.catalog import column_by_key, columns, parameter_by_key, parameters
 from src.services.journal import add_audit
 from src.services.rules import all_lock_keys, matching_rules, options_for
@@ -209,6 +209,44 @@ def list_sheet_workbooks(session: Session, workbook: Workbook) -> list[Workbook]
         .order_by(Workbook.sheet_order, Workbook.created_at)
         .all()
     )
+
+
+def delete_sheet_workbook(session: Session, root: Workbook, target: Workbook) -> tuple[list[Workbook], str]:
+    sheets = list_sheet_workbooks(session, root)
+    if target.id not in {item.id for item in sheets}:
+        raise ValueError("Лист не найден в проекте")
+    remaining = [item for item in sheets if item.id != target.id]
+    if not remaining:
+        raise ValueError("Нельзя удалить единственный лист проекта")
+    if target.is_primary and target.id != root.id:
+        raise ValueError("Сначала снимите с листа статус основного")
+    successor = remaining[0]
+    if target.id == root.id:
+        for item in remaining:
+            item.parent_workbook_id = None if item.id == successor.id else successor.id
+        existing_keys = {
+            key
+            for (key,) in session.query(TriangleSheet.sheet_key).filter(TriangleSheet.workbook_id == successor.id)
+        }
+        movable = session.query(TriangleSheet).filter(TriangleSheet.workbook_id == target.id)
+        if existing_keys:
+            movable = movable.filter(~TriangleSheet.sheet_key.in_(existing_keys))
+        movable.update({"workbook_id": successor.id}, synchronize_session=False)
+        session.flush()
+        session.expire(target, ["sheets", "triangle_sheets"])
+        session.delete(target)
+        new_root = successor
+    else:
+        session.delete(target)
+        new_root = root
+    session.flush()
+    sheets = list_sheet_workbooks(session, new_root)
+    for order, item in enumerate(sheets):
+        item.sheet_order = order
+    new_root.updated_at = _now()
+    session.flush()
+    active_id = successor.id if target.id == root.id else sheets[0].id
+    return sheets, active_id
 
 
 def set_primary_sheet(session: Session, workbook: Workbook, username: str) -> list[Workbook]:

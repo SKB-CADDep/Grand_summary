@@ -559,6 +559,12 @@ def sync_triangle_data(
             cell.status = "empty"
             cleared += 1
 
+    for cell, value, _comment, _parameter_label, _column_label in planned:
+        if value:
+            workbook_service.apply_rules(
+                session, target_workbook, cell.parameter_key, cell.column_key, username
+            )
+
     add_audit(
         session,
         actor=username,
