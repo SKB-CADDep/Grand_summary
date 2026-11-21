@@ -1,0 +1,907 @@
+from __future__ import annotations
+
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QAction, QBrush, QColor, QKeySequence, QShortcut
+from PyQt6.QtWidgets import (
+    QAbstractItemView,
+    QComboBox,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QMenu,
+    QPlainTextEdit,
+    QPushButton,
+    QSplitter,
+    QStyledItemDelegate,
+    QTableWidget,
+    QTableWidgetItem,
+    QTabBar,
+    QVBoxLayout,
+    QWidget,
+)
+
+from desktop.ui.icons import eye_icon, pencil_icon
+from desktop.ui.style import COMPUTED, CONFIRMED, DRAFT, HIGHLIGHT, PARAM_BG, PRIMARY, SECTION_BG, TRIANGLE, UNIFIED
+
+PARAM_ROLE = Qt.ItemDataRole.UserRole
+COLUMN_ROLE = Qt.ItemDataRole.UserRole + 1
+OPTIONS_ROLE = Qt.ItemDataRole.UserRole + 2
+KIND_ROLE = Qt.ItemDataRole.UserRole + 3
+
+
+def _status_color(cell: dict | None, row_kind: str) -> QColor | None:
+    if row_kind != "editable":
+        return QColor(COMPUTED)
+    if not cell:
+        return None
+    if cell.get("locked"):
+        return QColor(COMPUTED)
+    if cell.get("unified"):
+        return QColor(UNIFIED)
+    status = cell.get("status") or "empty"
+    if status == "draft":
+        return QColor(DRAFT)
+    if status == "confirmed":
+        return QColor(CONFIRMED)
+    if status == "triangle":
+        return QColor(TRIANGLE)
+    if status in {"computed", "initial"}:
+        return QColor(COMPUTED)
+    return None
+
+
+class CellDelegate(QStyledItemDelegate):
+    def createEditor(self, parent, option, index):  # noqa: N802
+        options = index.data(OPTIONS_ROLE) or []
+        if options:
+            combo = QComboBox(parent)
+            combo.setEditable(True)
+            combo.addItem("")
+            for value in options:
+                combo.addItem(str(value))
+            return combo
+        editor = QLineEdit(parent)
+        editor.setFrame(False)
+        return editor
+
+    def setEditorData(self, editor, index):  # noqa: N802
+        text = index.data(Qt.ItemDataRole.EditRole) or index.data(Qt.ItemDataRole.DisplayRole) or ""
+        if isinstance(editor, QComboBox):
+            pos = editor.findText(str(text))
+            if pos >= 0:
+                editor.setCurrentIndex(pos)
+            else:
+                editor.setEditText(str(text))
+            return
+        editor.setText(str(text))
+
+    def setModelData(self, editor, model, index):  # noqa: N802
+        if isinstance(editor, QComboBox):
+            model.setData(index, editor.currentText(), Qt.ItemDataRole.EditRole)
+            return
+        model.setData(index, editor.text(), Qt.ItemDataRole.EditRole)
+
+
+class TablePage(QWidget):
+    save_project_requested = pyqtSignal()
+    import_workbook_requested = pyqtSignal()
+    export_current_requested = pyqtSignal()
+    export_all_requested = pyqtSignal()
+    compose_report_requested = pyqtSignal()
+    sheet_selected = pyqtSignal(str)
+    sheet_copy_requested = pyqtSignal(str)
+    sheet_rename_requested = pyqtSignal(str)
+    sheet_primary_requested = pyqtSignal(str)
+    sheet_ordinary_requested = pyqtSignal(str)
+    sheet_delete_requested = pyqtSignal(str)
+    draft_requested = pyqtSignal(str, str, str, object)
+    confirm_requested = pyqtSignal(str, str, str, str, object)
+    discard_requested = pyqtSignal(str, str)
+    comment_requested = pyqtSignal(str, str, str)
+    unify_requested = pyqtSignal(str, str, bool)
+    history_needed = pyqtSignal(str, str)
+    last_comment_needed = pyqtSignal(str, str)
+    add_parameter_requested = pyqtSignal(dict)
+    update_parameter_requested = pyqtSignal(str, dict)
+    delete_parameter_requested = pyqtSignal(str)
+    add_column_requested = pyqtSignal(str)
+    update_column_requested = pyqtSignal(str, str)
+    delete_column_requested = pyqtSignal(str)
+    cell_selected = pyqtSignal(str, str)
+    save_all_drafts_requested = pyqtSignal()
+    history_panel_toggled = pyqtSignal(bool)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.catalog: dict | None = None
+        self.workbook: dict | None = None
+        self.unsaved: list[dict] = []
+        self.sheets: list[dict] = []
+        self.history_items: list[dict] = []
+        self.can_write = False
+        self.busy = False
+        self.table_mode = "view"
+        self.structure_edit = False
+        self._cells: dict[str, dict] = {}
+        self._rebuilding = False
+        self._selected: tuple[str, str] | None = None
+        self._find_hits: list[tuple[int, int]] = []
+        self._find_index = 0
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(8, 8, 8, 8)
+        root.setSpacing(6)
+
+        header = QHBoxLayout()
+        self.title = QLabel()
+        self.title.setStyleSheet("font-size: 18px; font-weight: 600;")
+        header.addWidget(self.title, 1)
+        self.save_btn = QPushButton("Сохранить проект")
+        self.import_btn = QPushButton("Импортировать .xlsx")
+        self.export_sheet_btn = QPushButton("Выгрузить лист")
+        self.export_all_btn = QPushButton("Выгрузить всё")
+        self.report_btn = QPushButton("Составить отчет")
+        self.save_btn.clicked.connect(self.save_project_requested.emit)
+        self.import_btn.clicked.connect(self.import_workbook_requested.emit)
+        self.export_sheet_btn.clicked.connect(self.export_current_requested.emit)
+        self.export_all_btn.clicked.connect(self.export_all_requested.emit)
+        self.report_btn.clicked.connect(self.compose_report_requested.emit)
+        for button in (self.save_btn, self.import_btn, self.export_sheet_btn, self.export_all_btn, self.report_btn):
+            header.addWidget(button)
+        root.addLayout(header)
+
+        toolbar_wrap = QWidget()
+        toolbar_wrap.setObjectName("guide-colors")
+        toolbar = QHBoxLayout(toolbar_wrap)
+        toolbar.setContentsMargins(0, 0, 0, 0)
+        self.view_btn = QPushButton()
+        self.edit_btn = QPushButton()
+        self.view_btn.setIcon(eye_icon())
+        self.edit_btn.setIcon(pencil_icon())
+        self.view_btn.setProperty("modeBtn", True)
+        self.edit_btn.setProperty("modeBtn", True)
+        self.view_btn.setObjectName("guide-table-mode")
+        self.view_btn.setToolTip("Режим просмотра")
+        self.edit_btn.setToolTip("Режим редактирования")
+        self.view_btn.setCheckable(True)
+        self.edit_btn.setCheckable(True)
+        self.view_btn.setChecked(True)
+        self.view_btn.clicked.connect(lambda: self.set_mode("view"))
+        self.edit_btn.clicked.connect(lambda: self.set_mode("edit"))
+        toolbar.addWidget(self.view_btn)
+        toolbar.addWidget(self.edit_btn)
+        self.mode_hint = QLabel()
+        self.mode_hint.setProperty("role", "hint")
+        toolbar.addWidget(self.mode_hint, 1)
+        self.unsaved_label = QLabel()
+        toolbar.addWidget(self.unsaved_label)
+        self.structure_btn = QPushButton("Редактировать структуру")
+        self.structure_btn.setObjectName("guide-add-param")
+        self.structure_btn.clicked.connect(self._toggle_structure)
+        toolbar.addWidget(self.structure_btn)
+        root.addWidget(toolbar_wrap)
+
+        self.structure_box = QWidget()
+        struct = QVBoxLayout(self.structure_box)
+        struct.setContentsMargins(0, 0, 0, 0)
+        row1 = QHBoxLayout()
+        self.struct_label = QLineEdit()
+        self.struct_label.setPlaceholderText("Наименование")
+        self.struct_unit = QLineEdit()
+        self.struct_unit.setPlaceholderText("Ед. изм.")
+        self.struct_unit.setMaximumWidth(90)
+        self.struct_indent = QComboBox()
+        self.struct_indent.addItem("0 — группа", 0)
+        self.struct_indent.addItem("1", 1)
+        self.struct_indent.addItem("2", 2)
+        self.struct_indent.setCurrentIndex(1)
+        save_row_btn = QPushButton("Сохранить строку")
+        add_row_btn = QPushButton("Добавить")
+        add_child_btn = QPushButton("Добавить вложенный")
+        delete_row_btn = QPushButton("Удалить")
+        save_row_btn.clicked.connect(self._save_parameter)
+        add_row_btn.clicked.connect(self._add_parameter)
+        add_child_btn.clicked.connect(self._add_child)
+        delete_row_btn.clicked.connect(self._delete_parameter)
+        for widget in (
+            self.struct_label,
+            self.struct_unit,
+            QLabel("Уровень"),
+            self.struct_indent,
+            save_row_btn,
+            add_row_btn,
+            add_child_btn,
+            delete_row_btn,
+        ):
+            row1.addWidget(widget)
+        struct.addLayout(row1)
+        row2 = QHBoxLayout()
+        row2.addWidget(QLabel("Столбцы листа"))
+        self.column_combo = QComboBox()
+        self.column_combo.currentIndexChanged.connect(self._column_picked)
+        self.column_label = QLineEdit()
+        self.column_label.setPlaceholderText("Наименование столбца")
+        save_col_btn = QPushButton("Сохранить название")
+        delete_col_btn = QPushButton("Удалить столбец")
+        self.new_column = QLineEdit()
+        self.new_column.setPlaceholderText("Новый столбец")
+        add_col_btn = QPushButton("Добавить столбец")
+        save_col_btn.clicked.connect(self._save_column)
+        delete_col_btn.clicked.connect(self._delete_column)
+        add_col_btn.clicked.connect(self._add_column)
+        for widget in (
+            self.column_combo,
+            self.column_label,
+            save_col_btn,
+            delete_col_btn,
+            self.new_column,
+            add_col_btn,
+        ):
+            row2.addWidget(widget)
+        struct.addLayout(row2)
+        self.structure_box.hide()
+        root.addWidget(self.structure_box)
+
+        self.find_bar = QWidget()
+        find_row = QHBoxLayout(self.find_bar)
+        find_row.setContentsMargins(0, 0, 0, 0)
+        self.find_input = QLineEdit()
+        self.find_input.setPlaceholderText("Найти…")
+        self.find_input.textChanged.connect(self._find)
+        prev_btn = QPushButton("↑")
+        next_btn = QPushButton("↓")
+        close_find = QPushButton("Закрыть")
+        prev_btn.clicked.connect(lambda: self._step_find(-1))
+        next_btn.clicked.connect(lambda: self._step_find(1))
+        close_find.clicked.connect(self.find_bar.hide)
+        self.find_count = QLabel()
+        find_row.addWidget(self.find_input)
+        find_row.addWidget(prev_btn)
+        find_row.addWidget(next_btn)
+        find_row.addWidget(self.find_count)
+        find_row.addWidget(close_find)
+        self.find_bar.hide()
+        root.addWidget(self.find_bar)
+        QShortcut(QKeySequence.StandardKey.Find, self, self._open_find)
+
+        self.sheet_bar = QTabBar()
+        self.sheet_bar.setObjectName("guide-sheet")
+        self.sheet_bar.setDrawBase(False)
+        self.sheet_bar.setExpanding(False)
+        self.sheet_bar.currentChanged.connect(self._sheet_changed)
+        self.sheet_bar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.sheet_bar.customContextMenuRequested.connect(self._sheet_menu)
+        root.addWidget(self.sheet_bar)
+
+        split = QSplitter()
+        split.setOrientation(Qt.Orientation.Horizontal)
+        self.table = QTableWidget()
+        self.table.setObjectName("guide-table")
+        self.table.setItemDelegate(CellDelegate(self.table))
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
+        self.table.cellClicked.connect(self._cell_clicked)
+        self.table.cellDoubleClicked.connect(self._cell_double)
+        self.table.itemChanged.connect(self._item_changed)
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._cell_menu)
+        self.table.currentCellChanged.connect(self._current_changed)
+        self.table.setMouseTracking(True)
+        self.table.viewport().setMouseTracking(True)
+        self.table.cellEntered.connect(self._cell_entered)
+        split.addWidget(self.table)
+
+        self.split = split
+        self.history_panel = QWidget()
+        self.history_panel.setObjectName("guide-edit")
+        hist = QVBoxLayout(self.history_panel)
+        hist.setContentsMargins(8, 0, 0, 0)
+        hist.setSpacing(8)
+        hist_header = QHBoxLayout()
+        title = QLabel("История изменений")
+        title.setStyleSheet("font-weight: 600;")
+        hist_header.addWidget(title)
+        hist.addLayout(hist_header)
+        self.cell_caption = QLabel()
+        self.cell_caption.setWordWrap(True)
+        hist.addWidget(self.cell_caption)
+        self.edit_row = QWidget()
+        edit_layout = QVBoxLayout(self.edit_row)
+        edit_layout.setContentsMargins(0, 0, 0, 0)
+        self.link_edit = QLineEdit()
+        self.link_edit.setPlaceholderText("Ссылка (прячется в номере)")
+        self.comment_edit = QLineEdit()
+        self.comment_edit.setPlaceholderText("Комментарий (обязателен)")
+        btn_row = QHBoxLayout()
+        self.confirm_btn = QPushButton("Сохранить значение")
+        self.discard_btn = QPushButton("Отменить черновик")
+        self.confirm_btn.clicked.connect(self._confirm)
+        self.discard_btn.clicked.connect(self._discard)
+        btn_row.addWidget(self.confirm_btn)
+        btn_row.addWidget(self.discard_btn)
+        edit_layout.addWidget(self.link_edit)
+        edit_layout.addWidget(self.comment_edit)
+        edit_layout.addLayout(btn_row)
+        hist.addWidget(self.edit_row)
+        self.view_hint = QLabel("Чтобы изменить значение, включите режим редактирования.")
+        self.view_hint.setProperty("role", "hint")
+        hist.addWidget(self.view_hint)
+        self.lock_hint = QLabel()
+        self.lock_hint.setProperty("role", "hint")
+        hist.addWidget(self.lock_hint)
+        self.comment_box = QWidget()
+        comment_layout = QVBoxLayout(self.comment_box)
+        comment_layout.setContentsMargins(0, 0, 0, 0)
+        self.comment_label = QLabel("Комментарий к ячейке")
+        self.cell_comment = QPlainTextEdit()
+        self.cell_comment.setPlaceholderText("Введите комментарий")
+        self.cell_comment.setMaximumHeight(70)
+        comment_btns = QHBoxLayout()
+        self.add_comment_btn = QPushButton("Добавить комментарий")
+        cancel_comment = QPushButton("Отмена")
+        self.add_comment_btn.clicked.connect(self._submit_comment)
+        cancel_comment.clicked.connect(lambda: self.comment_box.hide())
+        comment_btns.addWidget(self.add_comment_btn)
+        comment_btns.addWidget(cancel_comment)
+        comment_layout.addWidget(self.comment_label)
+        comment_layout.addWidget(self.cell_comment)
+        comment_layout.addLayout(comment_btns)
+        self.comment_box.hide()
+        hist.addWidget(self.comment_box)
+        self.history_table = QTableWidget(0, 5)
+        self.history_table.setHorizontalHeaderLabels(["Когда", "Кто", "Было", "Стало", "Комментарий"])
+        self.history_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.history_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        hist.addWidget(self.history_table, 1)
+        self.history_empty = QLabel("Выберите ячейку, чтобы увидеть историю. Правка доступна в режиме редактирования.")
+        self.history_empty.setProperty("role", "hint")
+        hist.addWidget(self.history_empty)
+        self.history_panel.setMinimumWidth(280)
+        split.addWidget(self.history_panel)
+        split.setStretchFactor(0, 1)
+        split.setSizes([900, 360])
+        root.addWidget(split, 1)
+        self._history_position = "right"
+        self._comment_mode = False
+
+        self.empty = QLabel("Сначала выберите объект на вкладке «Объект и треугольники».")
+        self.empty.setProperty("role", "hint")
+        root.addWidget(self.empty)
+
+    def set_mode(self, mode: str) -> None:
+        if self.workbook and self.workbook.get("is_primary"):
+            mode = "view"
+        self.table_mode = mode
+        self.view_btn.setChecked(mode == "view")
+        self.edit_btn.setChecked(mode == "edit")
+        self.view_btn.setProperty("active", mode == "view")
+        self.edit_btn.setProperty("active", mode == "edit")
+        self.view_btn.style().unpolish(self.view_btn)
+        self.view_btn.style().polish(self.view_btn)
+        self.edit_btn.style().unpolish(self.edit_btn)
+        self.edit_btn.style().polish(self.edit_btn)
+        if mode != "edit":
+            self.structure_edit = False
+            self.structure_box.hide()
+        self._apply_edit_triggers()
+        self._refresh_hints()
+
+    def set_data(
+        self,
+        *,
+        object_name: str,
+        catalog: dict | None,
+        workbook: dict | None,
+        unsaved: list[dict],
+        sheets: list[dict],
+        can_write: bool,
+        busy: bool,
+    ) -> None:
+        self.catalog = catalog
+        self.workbook = workbook
+        self.unsaved = unsaved
+        self.sheets = sheets
+        self.can_write = can_write
+        self.busy = busy
+        self.title.setText(object_name or "")
+        self._cells = {
+            f"{cell.get('parameter_key')}:{cell.get('column_key')}": cell for cell in (workbook or {}).get("cells") or []
+        }
+        has_book = catalog is not None and workbook is not None
+        self.empty.setVisible(not has_book)
+        self.table.setVisible(has_book)
+        self.sheet_bar.setVisible(has_book)
+        writable = can_write and not busy and has_book
+        self.save_btn.setEnabled(writable)
+        self.import_btn.setEnabled(writable)
+        self.export_sheet_btn.setEnabled(has_book and not busy)
+        self.export_all_btn.setEnabled(has_book and not busy)
+        self.report_btn.setEnabled(has_book and not busy)
+        if workbook and workbook.get("is_primary"):
+            self.set_mode("view")
+        self.edit_btn.setEnabled(can_write and not (workbook or {}).get("is_primary"))
+        self.structure_btn.setVisible(self.table_mode == "edit" and writable and not (workbook or {}).get("is_primary"))
+        self._fill_sheets()
+        self._fill_columns()
+        self._rebuild_table()
+        self._refresh_hints()
+
+    def set_history_layout(self, position: str, opened: bool, sizes: dict) -> None:
+        self._history_position = position
+        self.history_panel.setVisible(opened)
+        if position == "bottom":
+            self.split.setOrientation(Qt.Orientation.Vertical)
+            self.split.setSizes([max(200, 800 - sizes.get("bottom", 260)), sizes.get("bottom", 260)])
+        else:
+            self.split.setOrientation(Qt.Orientation.Horizontal)
+            self.split.setSizes([max(400, 1280 - sizes.get("right", 360)), sizes.get("right", 360)])
+
+    def show_comment_tooltip(self, text: str | None) -> None:
+        if text:
+            self.table.setToolTip(text)
+        else:
+            self.table.setToolTip("")
+
+    def set_history(self, items: list[dict]) -> None:
+        self.history_items = items
+        self.history_table.setRowCount(len(items) or 1)
+        if not items:
+            self.history_table.setItem(0, 0, QTableWidgetItem("История пуста"))
+            self.history_table.setSpan(0, 0, 1, 5)
+            return
+        self.history_table.clearSpans()
+        for row, item in enumerate(items):
+            values = [
+                item.get("created_at") or "",
+                item.get("author") or "",
+                item.get("old_value") or "",
+                item.get("new_value") or "",
+                item.get("comment") or "",
+            ]
+            for col, value in enumerate(values):
+                self.history_table.setItem(row, col, QTableWidgetItem(str(value)))
+        self.history_table.resizeColumnsToContents()
+
+    def current_cell(self) -> tuple[str, str] | None:
+        return self._selected
+
+    def _refresh_hints(self) -> None:
+        if (self.workbook or {}).get("is_primary"):
+            self.mode_hint.setText("Основной лист доступен только для просмотра.")
+        elif self.table_mode == "edit":
+            self.mode_hint.setText("Жёлтый — черновик, зелёный — сохранено, серый — группа или заблокировано правилом.")
+        else:
+            self.mode_hint.setText("Просмотр: значения не меняются. Чтобы править ячейки, включите режим редактирования.")
+        if self.unsaved:
+            self.unsaved_label.setText(f"Несохранено ячеек: {len(self.unsaved)}")
+            self.unsaved_label.setProperty("role", "warn")
+        else:
+            self.unsaved_label.setText("Несохранённых ячеек нет")
+            self.unsaved_label.setProperty("role", "hint")
+        self.unsaved_label.style().unpolish(self.unsaved_label)
+        self.unsaved_label.style().polish(self.unsaved_label)
+        self.structure_btn.setText("Готово" if self.structure_edit else "Редактировать структуру")
+
+    def _apply_edit_triggers(self) -> None:
+        editing = self.table_mode == "edit" and self.can_write and not (self.workbook or {}).get("is_primary")
+        if editing:
+            self.table.setEditTriggers(
+                QAbstractItemView.EditTrigger.DoubleClicked | QAbstractItemView.EditTrigger.EditKeyPressed
+            )
+        else:
+            self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+
+    def _fill_sheets(self) -> None:
+        self.sheet_bar.blockSignals(True)
+        while self.sheet_bar.count():
+            self.sheet_bar.removeTab(0)
+        current_id = (self.workbook or {}).get("id")
+        current_index = 0
+        for index, sheet in enumerate(self.sheets):
+            name = sheet.get("name") or ""
+            if sheet.get("is_primary"):
+                name = f"{name} · основной"
+            self.sheet_bar.addTab(name)
+            self.sheet_bar.setTabData(index, sheet.get("id"))
+            if sheet.get("id") == current_id:
+                current_index = index
+        if self.sheets:
+            self.sheet_bar.setCurrentIndex(current_index)
+        self.sheet_bar.blockSignals(False)
+
+    def _fill_columns(self) -> None:
+        current = self.column_combo.currentData()
+        self.column_combo.blockSignals(True)
+        self.column_combo.clear()
+        for column in (self.catalog or {}).get("columns") or []:
+            self.column_combo.addItem(column.get("label") or column.get("key"), column.get("key"))
+        if current:
+            index = self.column_combo.findData(current)
+            if index >= 0:
+                self.column_combo.setCurrentIndex(index)
+        self._column_picked()
+        self.column_combo.blockSignals(False)
+
+    def _rebuild_table(self) -> None:
+        catalog = self.catalog
+        self._rebuilding = True
+        self.table.clear()
+        if not catalog:
+            self.table.setRowCount(0)
+            self.table.setColumnCount(0)
+            self._rebuilding = False
+            return
+        columns = catalog.get("columns") or []
+        parameters = catalog.get("parameters") or []
+        self.table.setColumnCount(2 + len(columns))
+        self.table.setRowCount(len(parameters))
+        self.table.setHorizontalHeaderLabels(["Наименование параметра", "Ед. изм."] + [col.get("label") or "" for col in columns])
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+        header.resizeSection(0, 340)
+        header.resizeSection(1, 80)
+        header.setMinimumSectionSize(48)
+        self.table.verticalHeader().setDefaultSectionSize(22)
+        self.table.verticalHeader().setVisible(False)
+        for row, param in enumerate(parameters):
+            label = param.get("label") or ""
+            unit = param.get("unit") or ""
+            if unit and label.endswith(f", {unit}"):
+                label = label[: -len(unit) - 2].strip()
+            name = QTableWidgetItem(("    " * int(param.get("indent") or 0)) + label)
+            name.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+            name.setData(PARAM_ROLE, param.get("key"))
+            name.setData(KIND_ROLE, "param")
+            name.setBackground(QBrush(QColor(SECTION_BG if param.get("row_kind") != "editable" else PARAM_BG)))
+            self.table.setItem(row, 0, name)
+            unit_item = QTableWidgetItem(unit if param.get("row_kind") == "editable" else "")
+            unit_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+            unit_item.setBackground(QBrush(QColor(SECTION_BG if param.get("row_kind") != "editable" else PARAM_BG)))
+            self.table.setItem(row, 1, unit_item)
+            for col_index, column in enumerate(columns):
+                cell = self._cells.get(f"{param.get('key')}:{column.get('key')}")
+                text = (cell or {}).get("display") or (cell or {}).get("draft_value") or (cell or {}).get("value") or ""
+                item = QTableWidgetItem(str(text))
+                flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+                editable = (
+                    param.get("row_kind") == "editable"
+                    and not (cell or {}).get("locked")
+                    and not (cell or {}).get("unified")
+                    and not (self.workbook or {}).get("is_primary")
+                )
+                if editable:
+                    flags |= Qt.ItemFlag.ItemIsEditable
+                item.setFlags(flags)
+                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                item.setData(PARAM_ROLE, param.get("key"))
+                item.setData(COLUMN_ROLE, column.get("key"))
+                item.setData(OPTIONS_ROLE, (cell or {}).get("options") or param.get("options") or [])
+                item.setData(KIND_ROLE, "cell")
+                color = _status_color(cell, param.get("row_kind") or "editable")
+                if color:
+                    item.setBackground(QBrush(color))
+                self.table.setItem(row, 2 + col_index, item)
+        self.table.resizeColumnsToContents()
+        self._rebuilding = False
+        if self._selected:
+            self._select_keys(*self._selected, emit=False)
+
+    def _keys_at(self, row: int, column: int) -> tuple[str, str] | None:
+        item = self.table.item(row, column)
+        if not item:
+            return None
+        param = item.data(PARAM_ROLE)
+        col = item.data(COLUMN_ROLE)
+        if param and col:
+            return str(param), str(col)
+        if param and column == 0:
+            self.struct_label.setText(self.table.item(row, 0).text().strip() if self.table.item(row, 0) else "")
+            self.struct_unit.setText(self.table.item(row, 1).text() if self.table.item(row, 1) else "")
+            return None
+        return None
+
+    def _select_keys(self, parameter_key: str, column_key: str, emit: bool = True) -> None:
+        self._selected = (parameter_key, column_key)
+        self._apply_highlight(parameter_key, column_key)
+        cell = self._cells.get(f"{parameter_key}:{column_key}") or {}
+        self.link_edit.setText(cell.get("hyperlink") or "")
+        param = next((item for item in (self.catalog or {}).get("parameters") or [] if item.get("key") == parameter_key), None)
+        col = next((item for item in (self.catalog or {}).get("columns") or [] if item.get("key") == column_key), None)
+        unit = (param or {}).get("unit") or ""
+        label = (param or {}).get("label") or ""
+        self.cell_caption.setText(f"{label}{', ' + unit if unit else ''} / ступень {(col or {}).get('label') or ''}")
+        self.history_empty.hide()
+        editing = self.table_mode == "edit" and self.can_write and not (self.workbook or {}).get("is_primary")
+        self.edit_row.setVisible(editing)
+        self.view_hint.setVisible(not editing)
+        if cell.get("unified"):
+            self.lock_hint.setText("Унификация включена. Изменение значения ячейки запрещено.")
+            self.lock_hint.show()
+        elif cell.get("locked"):
+            self.lock_hint.setText("Поле автоматически заблокировано правилом унификации.")
+            self.lock_hint.show()
+        else:
+            self.lock_hint.hide()
+        self.discard_btn.setEnabled(cell.get("status") == "draft")
+        if emit:
+            self.cell_selected.emit(parameter_key, column_key)
+            self.history_needed.emit(parameter_key, column_key)
+
+    def _apply_highlight(self, parameter_key: str, column_key: str) -> None:
+        catalog = self.catalog or {}
+        parameters = catalog.get("parameters") or []
+        columns = catalog.get("columns") or []
+        sel_row = next((i for i, item in enumerate(parameters) if item.get("key") == parameter_key), -1)
+        sel_col = next((i for i, item in enumerate(columns) if item.get("key") == column_key), -1)
+        for row, param in enumerate(parameters):
+            for col in range(self.table.columnCount()):
+                item = self.table.item(row, col)
+                if not item:
+                    continue
+                cell = None
+                if col >= 2:
+                    cell = self._cells.get(f"{param.get('key')}:{columns[col - 2].get('key')}")
+                color = _status_color(cell, param.get("row_kind") or "editable") if col >= 2 else (
+                    QColor(COMPUTED) if param.get("row_kind") != "editable" else None
+                )
+                if row == sel_row or (col >= 2 and col - 2 == sel_col):
+                    if color is None:
+                        color = QColor(HIGHLIGHT)
+                if color:
+                    item.setBackground(QBrush(color))
+                else:
+                    item.setBackground(QBrush())
+                if row == sel_row and col >= 2 and col - 2 == sel_col:
+                    item.setForeground(QBrush(QColor(PRIMARY)))
+
+    def _cell_entered(self, row: int, column: int) -> None:
+        keys = self._keys_at(row, column)
+        if keys:
+            self.last_comment_needed.emit(*keys)
+
+    def _cell_clicked(self, row: int, column: int) -> None:
+        keys = self._keys_at(row, column)
+        if not keys:
+            parameters = (self.catalog or {}).get("parameters") or []
+            if 0 <= row < len(parameters):
+                self.struct_label.blockSignals(True)
+                param = parameters[row]
+                label = param.get("label") or ""
+                unit = param.get("unit") or ""
+                if unit and label.endswith(f", {unit}"):
+                    label = label[: -len(unit) - 2].strip()
+                self.struct_label.setText(label)
+                self.struct_unit.setText(unit)
+                indent = int(param.get("indent") or 1)
+                self.struct_indent.setCurrentIndex(min(max(indent, 0), 2))
+                self.struct_label.setProperty("param_key", param.get("key"))
+                self.struct_label.blockSignals(False)
+            return
+        self._select_keys(*keys)
+
+    def _cell_double(self, row: int, column: int) -> None:
+        keys = self._keys_at(row, column)
+        if keys:
+            self._select_keys(*keys)
+        if self.table_mode != "edit":
+            return
+
+    def _current_changed(self, row: int, column: int, _prev_row: int, _prev_col: int) -> None:
+        keys = self._keys_at(row, column)
+        if keys:
+            self._select_keys(*keys)
+
+    def _item_changed(self, item: QTableWidgetItem) -> None:
+        if self._rebuilding or self.table_mode != "edit":
+            return
+        param = item.data(PARAM_ROLE)
+        column = item.data(COLUMN_ROLE)
+        if not param or not column:
+            return
+        hyperlink = self.link_edit.text().strip() or None
+        self.draft_requested.emit(str(param), str(column), item.text(), hyperlink)
+
+    def _confirm(self) -> None:
+        if not self._selected:
+            return
+        param, column = self._selected
+        cell = self._cells.get(f"{param}:{column}") or {}
+        value = cell.get("display") or cell.get("draft_value") or cell.get("value") or ""
+        row = self.table.currentRow()
+        col = self.table.currentColumn()
+        item = self.table.item(row, col) if row >= 0 and col >= 0 else None
+        if item and item.data(PARAM_ROLE) == param:
+            value = item.text()
+        self.confirm_requested.emit(param, column, value, self.comment_edit.toPlainText().strip(), self.link_edit.text().strip() or None)
+
+    def _discard(self) -> None:
+        if self._selected:
+            self.discard_requested.emit(*self._selected)
+
+    def _unify(self) -> None:
+        if not self._selected:
+            return
+        param, column = self._selected
+        cell = self._cells.get(f"{param}:{column}") or {}
+        self.unify_requested.emit(param, column, not bool(cell.get("unified")))
+
+    def _toggle_structure(self) -> None:
+        self.structure_edit = not self.structure_edit
+        self.structure_box.setVisible(self.structure_edit)
+        self._refresh_hints()
+
+    def _param_key(self) -> str:
+        return str(self.struct_label.property("param_key") or "")
+
+    def _save_parameter(self) -> None:
+        key = self._param_key()
+        if not key:
+            return
+        indent = int(self.struct_indent.currentData())
+        self.update_parameter_requested.emit(
+            key,
+            {
+                "label": self.struct_label.text().strip(),
+                "unit": self.struct_unit.text().strip(),
+                "indent": indent,
+                "row_kind": "section" if indent == 0 else "editable",
+            },
+        )
+
+    def _add_parameter(self) -> None:
+        indent = int(self.struct_indent.currentData())
+        self.add_parameter_requested.emit(
+            {
+                "label": self.struct_label.text().strip() or "Новый параметр",
+                "unit": self.struct_unit.text().strip(),
+                "indent": indent,
+                "row_kind": "section" if indent == 0 else "editable",
+                "insert_after": self._param_key() or None,
+            }
+        )
+
+    def _add_child(self) -> None:
+        parent_key = self._param_key()
+        parent = next((item for item in (self.catalog or {}).get("parameters") or [] if item.get("key") == parent_key), None)
+        indent = min(int((parent or {}).get("indent") or 0) + 1, 2)
+        self.add_parameter_requested.emit(
+            {
+                "label": self.struct_label.text().strip() or "Новый параметр",
+                "unit": self.struct_unit.text().strip(),
+                "indent": indent,
+                "row_kind": "editable",
+                "insert_after": parent_key or None,
+                "group": (parent or {}).get("key"),
+            }
+        )
+
+    def _delete_parameter(self) -> None:
+        key = self._param_key()
+        if key:
+            self.delete_parameter_requested.emit(key)
+
+    def _column_picked(self) -> None:
+        key = self.column_combo.currentData()
+        column = next((item for item in (self.catalog or {}).get("columns") or [] if item.get("key") == key), None)
+        if column:
+            self.column_label.setText(column.get("label") or "")
+
+    def _save_column(self) -> None:
+        key = self.column_combo.currentData()
+        if key and self.column_label.text().strip():
+            self.update_column_requested.emit(str(key), self.column_label.text().strip())
+
+    def _delete_column(self) -> None:
+        key = self.column_combo.currentData()
+        if key:
+            self.delete_column_requested.emit(str(key))
+
+    def _add_column(self) -> None:
+        label = self.new_column.text().strip()
+        if label:
+            self.add_column_requested.emit(label)
+            self.new_column.clear()
+
+    def _sheet_changed(self, index: int) -> None:
+        sheet_id = self.sheet_bar.tabData(index)
+        if sheet_id and sheet_id != (self.workbook or {}).get("id"):
+            self.sheet_selected.emit(str(sheet_id))
+
+    def _sheet_menu(self, pos) -> None:
+        index = self.sheet_bar.tabAt(pos)
+        if index < 0:
+            return
+        sheet_id = str(self.sheet_bar.tabData(index) or "")
+        sheet = next((item for item in self.sheets if item.get("id") == sheet_id), None)
+        if not sheet:
+            return
+        menu = QMenu(self)
+        menu.addAction("Копировать лист", lambda: self.sheet_copy_requested.emit(sheet_id))
+        menu.addAction("Переименовать", lambda: self.sheet_rename_requested.emit(sheet_id))
+        if sheet.get("is_primary"):
+            menu.addAction("Снять статус основного", lambda: self.sheet_ordinary_requested.emit(sheet_id))
+        else:
+            menu.addAction("Сделать основным", lambda: self.sheet_primary_requested.emit(sheet_id))
+        root_id = (self.workbook or {}).get("parent_workbook_id") or (self.workbook or {}).get("id")
+        if sheet_id != root_id:
+            menu.addAction("Удалить лист", lambda: self.sheet_delete_requested.emit(sheet_id))
+        menu.exec(self.sheet_bar.mapToGlobal(pos))
+
+    def _cell_menu(self, pos) -> None:
+        item = self.table.itemAt(pos)
+        if not item:
+            return
+        param = item.data(PARAM_ROLE)
+        column = item.data(COLUMN_ROLE)
+        if not param or not column:
+            return
+        self._select_keys(str(param), str(column))
+        cell = self._cells.get(f"{param}:{column}") or {}
+        locked = bool(cell.get("locked") or cell.get("unified") or (self.workbook or {}).get("is_primary"))
+        menu = QMenu(self)
+        edit_act = menu.addAction("Изменить данные в ячейке", lambda: self._start_edit(str(param), str(column)))
+        edit_act.setEnabled(self.can_write and not locked and not self.busy)
+        menu.addAction("Найти в таблице", self._open_find)
+        menu.addAction("Показать историю", lambda: self.history_panel_toggled.emit(True) or self._select_keys(str(param), str(column)))
+        unify = QAction("Снять унификацию" if cell.get("unified") else "Установить унификацию", self)
+        unify.triggered.connect(self._unify)
+        unify.setEnabled(self.can_write and not (self.workbook or {}).get("is_primary") and not self.busy)
+        menu.addAction(unify)
+        comment_act = menu.addAction("Оставить комментарий", self._open_comment)
+        comment_act.setEnabled(self.can_write and not cell.get("locked") and not (self.workbook or {}).get("is_primary"))
+        save_act = menu.addAction("Сохранить черновик", self._confirm)
+        save_act.setEnabled(self.can_write and cell.get("status") == "draft")
+        all_act = menu.addAction("Сохранить все черновики", self.save_all_drafts_requested.emit)
+        all_act.setEnabled(bool(self.unsaved) and self.can_write)
+        menu.exec(self.table.viewport().mapToGlobal(pos))
+
+    def _start_edit(self, parameter_key: str, column_key: str) -> None:
+        self.set_mode("edit")
+        self._select_keys(parameter_key, column_key)
+        row = self.table.currentRow()
+        col = self.table.currentColumn()
+        if row >= 0 and col >= 2:
+            self.table.editItem(self.table.item(row, col))
+
+    def _open_comment(self) -> None:
+        self.comment_box.show()
+        self.comment_label.setText("Комментарий к ячейке")
+        self.cell_comment.setFocus()
+
+    def _submit_comment(self) -> None:
+        if not self._selected:
+            return
+        text = self.cell_comment.toPlainText().strip()
+        if not text:
+            return
+        self.comment_requested.emit(*self._selected, text)
+        self.cell_comment.clear()
+        self.comment_box.hide()
+
+    def _open_find(self) -> None:
+        self.find_bar.show()
+        self.find_input.setFocus()
+        self.find_input.selectAll()
+
+    def _find(self, text: str) -> None:
+        needle = text.strip().casefold()
+        self._find_hits = []
+        if needle:
+            for row in range(self.table.rowCount()):
+                for col in range(self.table.columnCount()):
+                    item = self.table.item(row, col)
+                    if item and needle in item.text().casefold():
+                        self._find_hits.append((row, col))
+        self._find_index = 0
+        self.find_count.setText(f"{len(self._find_hits)} совп." if self._find_hits else "")
+        if self._find_hits:
+            row, col = self._find_hits[0]
+            self.table.setCurrentCell(row, col)
+
+    def _step_find(self, delta: int) -> None:
+        if not self._find_hits:
+            return
+        self._find_index = (self._find_index + delta) % len(self._find_hits)
+        row, col = self._find_hits[self._find_index]
+        self.table.setCurrentCell(row, col)

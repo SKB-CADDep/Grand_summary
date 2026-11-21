@@ -18,7 +18,6 @@ CORE_MODULES = (
     "pytest",
     "httpx",
     "PyQt6",
-    "PyQt6.QtWebEngineWidgets",
 )
 
 

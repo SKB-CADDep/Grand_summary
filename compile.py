@@ -15,7 +15,6 @@ DIST = PROJECT / "dist"
 BUILD = PROJECT / "build"
 NAME = "GrandSummary"
 ENTRY = PROJECT / "run_desktop.py"
-FRONTEND_DIST = PROJECT / "frontend" / "dist"
 
 SEP = ";" if sys.platform == "win32" else ":"
 
@@ -38,17 +37,26 @@ HIDDEN = [
     "openpyxl",
     "docx",
     "multipart",
+    "httpx",
+    "httpx._transports.asgi",
     "PyQt6",
     "PyQt6.QtCore",
     "PyQt6.QtGui",
     "PyQt6.QtWidgets",
-    "PyQt6.QtWebEngineCore",
-    "PyQt6.QtWebEngineWidgets",
     "backend.main",
     "backend.routers.health",
     "backend.routers.objects",
     "backend.routers.updates",
     "backend.routers.workbooks",
+    "desktop.client",
+    "desktop.history",
+    "desktop.ui.window",
+    "desktop.ui.table_page",
+    "desktop.ui.object_page",
+    "desktop.ui.triangle_page",
+    "desktop.ui.report_page",
+    "desktop.ui.dialogs",
+    "desktop.ui.style",
 ]
 
 
@@ -57,19 +65,6 @@ def run(cmd: list[str], cwd: Path | None = None) -> None:
     result = subprocess.run(cmd, cwd=str(cwd or PROJECT))
     if result.returncode != 0:
         sys.exit(result.returncode)
-
-
-def ensure_frontend() -> None:
-    index = FRONTEND_DIST / "index.html"
-    if index.is_file():
-        print("[compile] frontend/dist уже есть")
-        return
-    print("[compile] собираю интерфейс npm run build")
-    npm = shutil.which("npm")
-    if not npm:
-        print("Нет npm. Соберите frontend вручную: cd frontend && npm run build")
-        sys.exit(1)
-    run([npm, "run", "build"], cwd=PROJECT / "frontend")
 
 
 def ensure_pyinstaller() -> None:
@@ -86,7 +81,6 @@ def main() -> None:
     from src.bootstrap import ensure_python_packages
 
     ensure_python_packages()
-    ensure_frontend()
     ensure_pyinstaller()
     for folder in (DIST, BUILD):
         if folder.exists():
@@ -114,8 +108,6 @@ def main() -> None:
         "--workpath",
         str(app_work),
         "--add-data",
-        f"{FRONTEND_DIST}{SEP}frontend/dist",
-        "--add-data",
         f"{PROJECT / 'templates'}{SEP}templates",
         "--add-data",
         f"{PROJECT / 'docs'}{SEP}docs",
@@ -123,8 +115,14 @@ def main() -> None:
         f"{PROJECT / 'data' / 'acl.json'}{SEP}data",
         "--collect-all",
         "PyQt6",
-        "--collect-all",
+        "--exclude-module",
         "PyQt6.QtWebEngineCore",
+        "--exclude-module",
+        "PyQt6.QtWebEngineWidgets",
+        "--exclude-module",
+        "PyQt6.QtWebEngineQuick",
+        "--exclude-module",
+        "PyQt6.QtWebEngine",
         "--collect-all",
         "docx",
     ]
