@@ -445,6 +445,8 @@ class UnsavedDialog(QDialog):
         items: list[dict],
         parent: QWidget | None = None,
         allow_skip: bool = False,
+        allow_discard: bool = True,
+        skip_text: str = "Всё равно перейти",
         on_save=None,
         on_discard=None,
     ) -> None:
@@ -459,7 +461,11 @@ class UnsavedDialog(QDialog):
         self._on_save = on_save
         self._on_discard = on_discard
         layout = QVBoxLayout(self)
-        intro = QLabel("Жёлтых ячеек быть не должно. Сохраните с комментарием или отмените черновик:")
+        intro = QLabel(
+            "Есть несохранённые черновики. Сохраните значение с комментарием. Отмена оставляет черновики в таблице."
+            if not allow_discard
+            else "Жёлтых ячеек быть не должно. Сохраните с комментарием или сбросьте черновик:"
+        )
         intro.setWordWrap(True)
         layout.addWidget(intro)
         scroll = QScrollArea()
@@ -476,12 +482,13 @@ class UnsavedDialog(QDialog):
             comment.setPlaceholderText("Комментарий")
             self._comments[index] = comment
             save = QPushButton("Сохранить")
-            discard = QPushButton("Отменить")
             save.clicked.connect(lambda _=False, i=index: self._save_row(i))
-            discard.clicked.connect(lambda _=False, i=index: self._discard_row(i))
             actions.addWidget(comment, 1)
             actions.addWidget(save)
-            actions.addWidget(discard)
+            if allow_discard:
+                discard = QPushButton("Сбросить черновик")
+                discard.clicked.connect(lambda _=False, i=index: self._discard_row(i))
+                actions.addWidget(discard)
             row.addLayout(actions)
             form.addWidget(block)
             self._blocks[index] = block
@@ -490,12 +497,12 @@ class UnsavedDialog(QDialog):
         layout.addWidget(scroll, 1)
         buttons = QHBoxLayout()
         if allow_skip:
-            skip = QPushButton("Всё равно перейти")
+            skip = QPushButton(skip_text)
             skip.clicked.connect(self._skip)
             buttons.addWidget(skip)
         buttons.addStretch(1)
-        close = QPushButton("Закрыть")
-        close.clicked.connect(self.accept)
+        close = QPushButton("Отмена" if not allow_discard else "Закрыть")
+        close.clicked.connect(self.reject if not allow_discard else self.accept)
         buttons.addWidget(close)
         layout.addLayout(buttons)
 

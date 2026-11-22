@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QPen
+from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPen
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -43,6 +43,32 @@ def excel_from_header(row: int, column: int) -> tuple[int, int]:
     return row + SKIP_TOP_ROWS + 1, column + SKIP_LEFT_COLUMNS + 1
 
 
+def _caption_text(row: list) -> str:
+    text = " ".join(" ".join(str(cell or "").split()) for cell in row if str(cell or "").strip())
+    return text if text.casefold().startswith("таблица") else ""
+
+
+def _visual_span(
+    merge: list | tuple,
+    excel_rows: list[int],
+    excel_columns: list[int],
+) -> tuple[int, int, int, int] | None:
+    if len(merge) != 4:
+        return None
+    r1, c1, r2, c2 = (int(merge[0]), int(merge[1]), int(merge[2]), int(merge[3]))
+    rows = [index for index, excel_row in enumerate(excel_rows) if r1 <= excel_row <= r2]
+    cols = [index for index, excel_col in enumerate(excel_columns) if c1 <= excel_col <= c2]
+    if not rows or not cols:
+        return None
+    if rows != list(range(rows[0], rows[0] + len(rows))):
+        return None
+    if cols != list(range(cols[0], cols[0] + len(cols))):
+        return None
+    if len(rows) == 1 and len(cols) == 1:
+        return None
+    return rows[0], cols[0], len(rows), len(cols)
+
+
 def cell_key(sheet_key: str, excel_row: int, excel_col: int) -> str:
     return f"{sheet_key}:{excel_row}:{excel_col}"
 
@@ -75,8 +101,8 @@ class TriangleCellDelegate(QStyledItemDelegate):
             painter.setFont(font)
         text = index.data(Qt.ItemDataRole.DisplayRole) or ""
         painter.drawText(
-            option.rect.adjusted(6, 3, -6, -3),
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap,
+            option.rect.adjusted(4, 1, -4, -1),
+            Qt.AlignmentFlag.AlignCenter,
             str(text),
         )
         painter.restore()
@@ -90,9 +116,17 @@ class TriangleGrid(QWidget):
         self._sheet_key = ""
         self._building = False
         self._syncing_width = False
+        self._excel_columns: list[int] = []
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
+
+        self.caption = QLabel()
+        self.caption.setObjectName("table-caption")
+        self.caption.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.caption.setWordWrap(True)
+        self.caption.hide()
+        layout.addWidget(self.caption)
 
         self.header = self._make_table(selectable=False)
         self.header.setObjectName("triangle-grid-header")
@@ -133,7 +167,7 @@ class TriangleGrid(QWidget):
         table.horizontalHeader().setStretchLastSection(False)
         table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         table.setShowGrid(False)
-        table.setWordWrap(True)
+        table.setWordWrap(False)
         table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         table.verticalHeader().setFixedWidth(38)
@@ -166,42 +200,68 @@ class TriangleGrid(QWidget):
         self.body.setRowCount(0)
         self.body.setColumnCount(0)
         self.header.hide()
+        self.caption.clear()
+        self.caption.hide()
         self._building = False
 
-    def fill(self, sheet_key: str, rows: list[list], selected: dict[str, dict]) -> None:
+    def fill(
+        self,
+        sheet_key: str,
+        rows: list[list],
+        selected: dict[str, dict],
+        merged_ranges: list | None = None,
+    ) -> None:
         self._sheet_key = sheet_key
         self._building = True
         width = max((len(row) for row in rows), default=0)
-        visible_width = max(0, width - SKIP_LEFT_COLUMNS)
-        header_rows = rows[SKIP_TOP_ROWS : SKIP_TOP_ROWS + FROZEN_HEADER_ROWS]
+        caption = ""
+        caption_index = -1
+        for index, row in enumerate(rows[:15]):
+            text = _caption_text(row)
+            if text:
+                caption = text
+                caption_index = index
+                break
+        self.caption.setText(caption)
+        self.caption.setVisible(bool(caption))
+        header_indexes = [
+            index
+            for index in range(SKIP_TOP_ROWS, SKIP_TOP_ROWS + FROZEN_HEADER_ROWS)
+            if index != caption_index and index < len(rows)
+        ]
+        header_rows = [rows[index] for index in header_indexes]
         body_rows = rows[MIN_ROW - 1 :]
+        self._excel_columns = list(range(SKIP_LEFT_COLUMNS + 1, width + 1))
 
-        self._fill_part(
+        header_excel_rows = [index + 1 for index in header_indexes]
+        body_excel_rows = list(range(MIN_ROW, MIN_ROW + len(body_rows)))
+        merges = merged_ranges or []
+        header_spans = self._fill_part(
             self.header,
             header_rows,
-            visible_width,
-            start_excel_row=SKIP_TOP_ROWS + 1,
+            self._excel_columns,
+            header_excel_rows,
             selectable=False,
             selected=selected,
+            merged_ranges=merges,
         )
+        body_spans = self._fill_part(
+            self.body,
+            body_rows,
+            self._excel_columns,
+            body_excel_rows,
+            selectable=True,
+            selected=selected,
+            merged_ranges=merges,
+        )
+        self._apply_column_widths(header_spans, body_spans)
         header_height = sum(self.header.rowHeight(row) for row in range(self.header.rowCount()))
-        if header_rows and visible_width:
+        if header_rows and self._excel_columns:
             self.header.setFixedHeight(header_height + 2)
             self.header.show()
         else:
             self.header.setFixedHeight(0)
             self.header.hide()
-
-        self._fill_part(
-            self.body,
-            body_rows,
-            visible_width,
-            start_excel_row=MIN_ROW,
-            selectable=True,
-            selected=selected,
-        )
-        for column in range(visible_width):
-            self.header.setColumnWidth(column, self.body.columnWidth(column))
         self._sync_header_pad()
         self._building = False
         self._restore_selection(selected)
@@ -211,20 +271,23 @@ class TriangleGrid(QWidget):
         self,
         table: QTableWidget,
         rows: list[list],
-        visible_width: int,
-        start_excel_row: int,
+        excel_columns: list[int],
+        excel_rows: list[int],
         selectable: bool,
         selected: dict[str, dict],
-    ) -> None:
+        merged_ranges: list,
+    ) -> list[tuple[int, int, int, int]]:
         table.clear()
+        table.clearSpans()
         table.setRowCount(len(rows))
-        table.setColumnCount(visible_width)
-        table.setVerticalHeaderLabels([str(start_excel_row + index) for index in range(len(rows))])
+        table.setColumnCount(len(excel_columns))
+        numbers = table.verticalHeader()
+        numbers.hide()
+        numbers.setFixedWidth(0)
         for r, row in enumerate(rows):
-            table.setRowHeight(r, 32 if not selectable else 26)
-            excel_row = start_excel_row + r
-            for c in range(visible_width):
-                excel_col = c + SKIP_LEFT_COLUMNS + 1
+            table.setRowHeight(r, 24)
+            excel_row = excel_rows[r]
+            for c, excel_col in enumerate(excel_columns):
                 raw = row[excel_col - 1] if excel_col - 1 < len(row) else ""
                 item = QTableWidgetItem(str(raw or ""))
                 source = is_source_cell(excel_row, excel_col)
@@ -236,7 +299,72 @@ class TriangleGrid(QWidget):
                 item.setData(Qt.ItemDataRole.UserRole + 1, cell_key(self._sheet_key, excel_row, excel_col) in selected)
                 item.setData(Qt.ItemDataRole.UserRole + 2, not selectable)
                 table.setItem(r, c, item)
-                table.setColumnWidth(c, max(64, min(320, table.sizeHintForColumn(c) + 16)))
+        spans: list[tuple[int, int, int, int]] = []
+        for merge in merged_ranges:
+            visual = _visual_span(merge, excel_rows, excel_columns)
+            if visual is None:
+                continue
+            row, column, row_span, col_span = visual
+            table.setSpan(row, column, row_span, col_span)
+            spans.append(visual)
+        return spans
+
+    def _apply_column_widths(
+        self,
+        header_spans: list[tuple[int, int, int, int]],
+        body_spans: list[tuple[int, int, int, int]],
+    ) -> None:
+        count = len(self._excel_columns)
+        if count == 0:
+            return
+        body_font = self.body.font()
+        header_font = QFont(body_font)
+        header_font.setBold(True)
+        body_metrics = QFontMetrics(body_font)
+        header_metrics = QFontMetrics(header_font)
+        widths = [52] * count
+
+        def consider(table: QTableWidget, spans: list[tuple[int, int, int, int]], metrics: QFontMetrics) -> None:
+            wide = {(row, column) for row, column, _row_span, col_span in spans if col_span > 1}
+            covered = {
+                (row + row_offset, column + col_offset)
+                for row, column, row_span, col_span in spans
+                for row_offset in range(row_span)
+                for col_offset in range(col_span)
+                if (row_offset, col_offset) != (0, 0)
+            }
+            for row in range(table.rowCount()):
+                for column in range(count):
+                    if (row, column) in wide or (row, column) in covered:
+                        continue
+                    item = table.item(row, column)
+                    if item and item.text():
+                        widths[column] = max(widths[column], metrics.horizontalAdvance(item.text()) + 18)
+
+        consider(self.header, header_spans, header_metrics)
+        consider(self.body, body_spans, body_metrics)
+        for table, spans, metrics in (
+            (self.header, header_spans, header_metrics),
+            (self.body, body_spans, body_metrics),
+        ):
+            for row, column, _row_span, col_span in spans:
+                if col_span <= 1:
+                    continue
+                item = table.item(row, column)
+                if not item or not item.text():
+                    continue
+                need = metrics.horizontalAdvance(item.text()) + 18
+                have = sum(widths[column : column + col_span])
+                if need <= have:
+                    continue
+                extra = need - have
+                share, remainder = divmod(extra, col_span)
+                for offset in range(col_span):
+                    widths[column + offset] += share + (1 if offset < remainder else 0)
+        for column, width in enumerate(widths):
+            size = min(width, 420)
+            self.body.setColumnWidth(column, size)
+            self.header.setColumnWidth(column, size)
 
     def _restore_selection(self, selected: dict[str, dict]) -> None:
         self.body.clearSelection()
@@ -244,7 +372,10 @@ class TriangleGrid(QWidget):
             if str(item.get("sheet_key") or "") != self._sheet_key:
                 continue
             visual_row = int(item.get("row") or 0) - MIN_ROW
-            visual_col = int(item.get("column") or 0) - SKIP_LEFT_COLUMNS - 1
+            try:
+                visual_col = self._excel_columns.index(int(item.get("column") or 0))
+            except ValueError:
+                continue
             cell = self.body.item(visual_row, visual_col)
             if cell is not None:
                 cell.setSelected(True)
@@ -252,7 +383,8 @@ class TriangleGrid(QWidget):
     def current_sheet_selection(self) -> list[dict]:
         cells: list[dict] = []
         for index in self.body.selectedIndexes():
-            excel_row, excel_col = excel_from_body(index.row(), index.column())
+            excel_row = MIN_ROW + index.row()
+            excel_col = self._excel_columns[index.column()]
             if not is_source_cell(excel_row, excel_col):
                 continue
             cells.append({"sheet_key": self._sheet_key, "row": excel_row, "column": excel_col})
@@ -428,7 +560,12 @@ class TrianglePage(QWidget):
             self.grid.clear()
             self._refresh_count()
             return
-        self.grid.fill(str(sheet.get("key") or ""), sheet.get("rows") or [], self._selected)
+        self.grid.fill(
+            str(sheet.get("key") or ""),
+            sheet.get("rows") or [],
+            self._selected,
+            sheet.get("merged_ranges") or [],
+        )
         self._refresh_count()
 
     def _capture_selection(self) -> None:

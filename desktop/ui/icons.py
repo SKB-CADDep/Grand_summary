@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PyQt6.QtCore import QRectF, Qt
+from PyQt6.QtCore import QPointF, QRectF, Qt
 from PyQt6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
 
 
@@ -40,19 +40,52 @@ def pencil_icon() -> QIcon:
     return QIcon(pix)
 
 
-def undo_icon() -> QIcon:
-    pix, painter = _pix(16)
-    painter.drawArc(QRectF(4, 4, 9, 9), 40 * 16, 220 * 16)
-    painter.drawLine(4, 7, 7, 4)
-    painter.drawLine(4, 7, 7, 10)
+def _history_pixmap(color: QColor, mirror: bool, dpr: int) -> QPixmap:
+    logical = 24
+    pix = QPixmap(logical * dpr, logical * dpr)
+    pix.setDevicePixelRatio(dpr)
+    pix.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pix)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    if mirror:
+        painter.translate(logical, 0)
+        painter.scale(-1, 1)
+    painter.translate(2.2, 2.4)
+    painter.scale(1.22, 1.22)
+    pen = QPen(color, 1.7)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    painter.setPen(pen)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    path = QPainterPath()
+    path.moveTo(4.4, 6.5)
+    path.lineTo(10.0, 6.5)
+    path.arcTo(QRectF(6.5, 6.5, 7.0, 7.0), 90, -180)
+    path.lineTo(8.4, 13.5)
+    painter.drawPath(path)
+    tip = QPointF(4.4, 6.5)
+    painter.drawLine(tip, QPointF(7.6, 3.5))
+    painter.drawLine(tip, QPointF(7.6, 9.5))
     painter.end()
-    return QIcon(pix)
+    return pix
+
+
+def _history_icon(mirror: bool) -> QIcon:
+    icon = QIcon()
+    colors = (
+        (QIcon.Mode.Normal, QColor("#263238")),
+        (QIcon.Mode.Active, QColor("#1f5e93")),
+        (QIcon.Mode.Disabled, QColor("#9aabb8")),
+    )
+    for dpr in (1, 2):
+        for mode, color in colors:
+            icon.addPixmap(_history_pixmap(color, mirror, dpr), mode, QIcon.State.Off)
+    return icon
+
+
+def undo_icon() -> QIcon:
+    return _history_icon(False)
 
 
 def redo_icon() -> QIcon:
-    pix, painter = _pix(16)
-    painter.drawArc(QRectF(3, 4, 9, 9), -80 * 16, 220 * 16)
-    painter.drawLine(12, 7, 9, 4)
-    painter.drawLine(12, 7, 9, 10)
-    painter.end()
-    return QIcon(pix)
+    return _history_icon(True)

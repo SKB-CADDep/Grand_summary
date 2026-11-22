@@ -75,9 +75,9 @@ class MainWindow(QMainWindow):
         self.busy = False
         self.undo_stack: list[dict] = []
         self.redo_stack: list[dict] = []
+        self._history_busy = False
         self.notes: list[dict] = []
         self.tab = "object"
-        self.pending_tab: str | None = None
         self.history_position = "right"
         self.history_panel_open = True
         self.history_sizes = {"right": 360, "bottom": 260}
@@ -108,8 +108,8 @@ class MainWindow(QMainWindow):
         self.chrome.journal_requested.connect(self._show_journal)
         self.chrome.guide_requested.connect(self._offer_guide)
         self.chrome.notes_requested.connect(self._show_notes)
-        self.chrome.undo_requested.connect(self.undo_action)
-        self.chrome.redo_requested.connect(self.redo_action)
+        self.chrome.undo_requested.connect(lambda: self._run_history("undo", from_button=True))
+        self.chrome.redo_requested.connect(lambda: self._run_history("redo", from_button=True))
         shell_layout.addWidget(self.chrome)
 
         workspace_wrap = QWidget()
@@ -145,8 +145,8 @@ class MainWindow(QMainWindow):
         self.menuBar().hide()
 
         self._connect_pages()
-        QShortcut(QKeySequence.StandardKey.Undo, self, self.undo_action)
-        QShortcut(QKeySequence.StandardKey.Redo, self, self.redo_action)
+        QShortcut(QKeySequence.StandardKey.Undo, self, lambda: self._run_history("undo"))
+        QShortcut(QKeySequence.StandardKey.Redo, self, lambda: self._run_history("redo"))
 
         self.poll_notes = QTimer(self)
         self.poll_notes.timeout.connect(self._poll_notes)
@@ -418,15 +418,6 @@ class MainWindow(QMainWindow):
     def _save_project(self) -> None:
         if not self.workbook:
             return
-        if self.unsaved:
-            dialog = UnsavedDialog(
-                self.unsaved,
-                self,
-                on_save=self._confirm_unsaved_row,
-                on_discard=self._discard_unsaved_row,
-            )
-            if not dialog.exec():
-                return
         self._set_busy(True)
         try:
             result = self.client.save_project(self._root_id() or self.workbook["id"])
@@ -506,9 +497,10 @@ class MainWindow(QMainWindow):
             self.tab = "table"
             extra = result.get("unsupported_fields") or []
             unsupported = f" Не перенесены: {', '.join(extra)}." if extra else ""
+            written = int(result.get("updated") or 0)
+            skipped = int(result.get("skipped") or 0) + int(result.get("conflicts") or 0)
             self._info(
-                f"Треугольники синхронизированы: записано {result.get('updated')}, очищено {result.get('cleared')}, "
-                f"пропущено {int(result.get('skipped') or 0) + int(result.get('conflicts') or 0)}.{unsupported}"
+                f"Треугольники синхронизированы: записано {written}, пропущено {skipped}.{unsupported}"
             )
         except Exception as exc:
             self._fail(exc)
@@ -530,8 +522,7 @@ class MainWindow(QMainWindow):
             self._fail(exc)
 
     def _compose_report(self) -> None:
-        if self.unsaved:
-            self._fail(Exception("Сначала сохраните или отмените черновики текущего листа."))
+        if not self._remind_drafts():
             return
         self.tab = "report"
         self._refresh_pages()
@@ -747,34 +738,71 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self._handle(exc)
 
-    def _in_plain_field(self) -> bool:
+    def _focused_text(self) -> QLineEdit | QPlainTextEdit | None:
         focus = QApplication.focusWidget()
         if isinstance(focus, (QLineEdit, QPlainTextEdit)):
-            parent = focus.parent()
-            while parent is not None:
-                if isinstance(parent, QTableWidget):
-                    return False
-                parent = parent.parent()
+            return focus
+        return None
+
+    def _inside_sheet(self, widget: QWidget) -> bool:
+        parent = widget.parent()
+        while parent is not None:
+            if isinstance(parent, QTableWidget):
+                return True
+            parent = parent.parent()
+        return False
+
+    def _edit_text_history(self, editor: QLineEdit | QPlainTextEdit, direction: str) -> bool:
+        if direction == "undo" and editor.isUndoAvailable():
+            editor.undo()
+            return True
+        if direction == "redo" and editor.isRedoAvailable():
+            editor.redo()
             return True
         return False
 
     def undo_action(self) -> None:
-        if self._in_plain_field():
-            return
-        if not self.can_write or self.busy or not self.undo_stack or not self.workbook:
-            return
-        entry = self.undo_stack.pop()
-        self.redo_stack.append(entry)
-        self._apply_history(entry, "undo")
+        self._run_history("undo", from_button=True)
 
     def redo_action(self) -> None:
-        if self._in_plain_field():
+        self._run_history("redo", from_button=True)
+
+    def _run_history(self, direction: str, from_button: bool = False) -> None:
+        if self._history_busy:
             return
-        if not self.can_write or self.busy or not self.redo_stack or not self.workbook:
-            return
-        entry = self.redo_stack.pop()
-        self.undo_stack.append(entry)
-        self._apply_history(entry, "redo")
+        editor = self._focused_text()
+        if editor is not None and not from_button:
+            if not self._inside_sheet(editor):
+                self._edit_text_history(editor, direction)
+                return
+            if self._edit_text_history(editor, direction):
+                return
+        self._history_busy = True
+        try:
+            if self.tab == "table":
+                self.table_page.commit_editor()
+            if not self.can_write or self.busy or not self.workbook:
+                return
+            stack = self.undo_stack if direction == "undo" else self.redo_stack
+            other = self.redo_stack if direction == "undo" else self.undo_stack
+            if not stack:
+                return
+            entry = stack.pop()
+            other.append(entry)
+            self._apply_history(entry, direction)
+        finally:
+            self._history_busy = False
+
+    def _put_history_back(self, entry: dict, direction: str) -> None:
+        if direction == "undo":
+            if self.redo_stack and self.redo_stack[-1] is entry:
+                self.redo_stack.pop()
+            self.undo_stack.append(entry)
+        else:
+            if self.undo_stack and self.undo_stack[-1] is entry:
+                self.undo_stack.pop()
+            self.redo_stack.append(entry)
+        self._refresh_history_actions()
 
     def _apply_history(self, entry: dict, direction: str) -> None:
         if not self.workbook:
@@ -800,19 +828,30 @@ class MainWindow(QMainWindow):
                     ],
                 },
             )
-            self.workbook = next_book
+        except Exception as exc:
+            self._put_history_back(entry, direction)
+            self._handle(exc)
+            return
+        self.workbook = next_book
+        try:
             self.catalog = self.client.catalog(next_book["id"])
             self.unsaved = self.client.unsaved(next_book["id"])
-            self._refresh_pages()
         except Exception as exc:
             self._handle(exc)
+        self._refresh_pages()
+        selected = self.table_page.current_cell()
+        if selected:
+            try:
+                self.table_page.set_history(self.client.history(next_book["id"], *selected))
+            except Exception:
+                pass
 
     def _try_change_tab(self, next_tab: str) -> None:
-        if next_tab != "object" and self.unsaved:
-            self.pending_tab = next_tab
-            self._open_unsaved()
+        if next_tab == "report" and self.unsaved:
             self.tab_strip.set_current(self.tab)
-            return
+            if not self._remind_drafts():
+                self.tab_strip.set_current(self.tab)
+                return
         self.tab = next_tab
         self._refresh_pages()
 
@@ -859,31 +898,39 @@ class MainWindow(QMainWindow):
         self.table_page.apply_cell(cell, self.unsaved)
         self._refresh_history_actions()
 
+    def _remind_drafts(self) -> bool:
+        """Напоминание перед отчётом. Отмена оставляет черновики и не меняет вкладку."""
+        if not self.unsaved or not self.workbook:
+            return True
+        dialog = UnsavedDialog(
+            list(self.unsaved),
+            self,
+            allow_discard=False,
+            on_save=self._confirm_unsaved_row,
+        )
+        if not dialog.exec():
+            return False
+        try:
+            self.unsaved = self.client.unsaved(self.workbook["id"])
+        except Exception:
+            return False
+        return not self.unsaved
+
     def _open_unsaved(self) -> None:
         if not self.unsaved or not self.workbook:
             return
         dialog = UnsavedDialog(
             self.unsaved,
             self,
-            allow_skip=bool(self.pending_tab),
             on_save=self._confirm_unsaved_row,
             on_discard=self._discard_unsaved_row,
         )
         dialog.exec()
-        if dialog.skipped and self.pending_tab:
-            self.tab = self.pending_tab
-            self.pending_tab = None
-            self._refresh_pages()
-            return
-        self.pending_tab = None
         try:
             self.unsaved = self.client.unsaved(self.workbook["id"])
         except Exception:
             pass
         self._reload_current()
-        if not self.unsaved and self.pending_tab:
-            self.tab = self.pending_tab
-            self._refresh_pages()
 
     def _refresh_application(self) -> None:
         try:
@@ -1097,8 +1144,16 @@ class MainWindow(QMainWindow):
             self.guide_overlay._place()
 
     def closeEvent(self, event) -> None:  # noqa: N802
-        if self.unsaved:
-            if QMessageBox.question(self, "Черновики", "Есть несохранённые черновики. Закрыть окно?") != QMessageBox.StandardButton.Yes:
+        if self.unsaved and self.workbook:
+            dialog = UnsavedDialog(
+                list(self.unsaved),
+                self,
+                allow_skip=True,
+                allow_discard=False,
+                skip_text="Закрыть программу",
+                on_save=self._confirm_unsaved_row,
+            )
+            if not dialog.exec() or (not dialog.skipped and self.unsaved):
                 event.ignore()
                 return
         self._save_history_prefs()

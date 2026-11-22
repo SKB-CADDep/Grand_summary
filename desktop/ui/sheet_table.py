@@ -84,7 +84,8 @@ class FrozenSheetTable(QTableWidget):
         header.sectionClicked.connect(self.header_clicked.emit)
         header.sectionDoubleClicked.connect(self.header_double_clicked.emit)
         header.customContextMenuRequested.connect(self._header_menu)
-        self.verticalHeader().hide()
+        self._hide_row_numbers(self)
+        self.setCornerButtonEnabled(False)
         self.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.setWordWrap(True)
@@ -94,7 +95,8 @@ class FrozenSheetTable(QTableWidget):
         self.frozen.setObjectName("id-sheet-frozen")
         frozen_header = StagesHeader(Qt.Orientation.Horizontal, self.frozen)
         self.frozen.setHorizontalHeader(frozen_header)
-        self.frozen.verticalHeader().hide()
+        self._hide_row_numbers(self.frozen)
+        self.frozen.setCornerButtonEnabled(False)
         self.frozen.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.frozen.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.frozen.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -161,7 +163,17 @@ class FrozenSheetTable(QTableWidget):
             self.viewport().height() + self.horizontalHeader().height(),
         )
 
+    @staticmethod
+    def _hide_row_numbers(grid: QTableWidget) -> None:
+        header = grid.verticalHeader()
+        header.hide()
+        header.setMinimumWidth(0)
+        header.setMaximumWidth(0)
+        header.setFixedWidth(0)
+
     def sync_frozen(self) -> None:
+        self._hide_row_numbers(self)
+        self._hide_row_numbers(self.frozen)
         self.frozen.setRowCount(self.rowCount())
         self.frozen.setColumnCount(FROZEN_COLUMNS)
         labels = []

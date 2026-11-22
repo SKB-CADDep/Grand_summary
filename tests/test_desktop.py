@@ -146,12 +146,83 @@ def test_triangle_grid_hides_preamble_and_keeps_excel_coords(monkeypatch):
     assert grid.header.rowCount() == 3
     assert grid.header.columnCount() == 4
     assert grid.header.item(0, 0).text() == "7-1"
-    assert grid.header.verticalHeaderItem(0).text() == "8"
+    assert grid.header.verticalHeader().isHidden()
     assert grid.body.item(0, 0).text() == "10-1"
-    assert grid.body.verticalHeaderItem(0).text() == "11"
+    assert grid.body.verticalHeader().isHidden()
     grid.body.item(0, 1).setSelected(True)
     grid.body.item(1, 1).setSelected(True)
     selected = grid.current_sheet_selection()
     assert {"sheet_key": "geometry", "row": 11, "column": 3} in selected
     assert {"sheet_key": "geometry", "row": 12, "column": 3} in selected
+    app.processEvents()
+
+
+def test_triangle_caption_and_flow_path_number_column(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    from desktop.ui.triangle_page import TriangleGrid
+
+    geometry = [[""] * 4 for _ in range(15)]
+    geometry[7][1] = "Таблица  .1 - Основные геометрические данные"
+    geometry[8][1] = "№ст"
+    geometry[8][2] = "e,"
+    geometry[10][1] = "2.0"
+    geometry[10][2] = "100"
+    grid = TriangleGrid()
+    grid.fill("geometry", geometry, {}, [[9, 2, 10, 2], [9, 3, 9, 4]])
+    assert grid.caption.text() == "Таблица .1 - Основные геометрические данные"
+    assert not grid.caption.isHidden()
+    assert grid.header.rowCount() == 2
+    assert grid.header.item(0, 0).text() == "№ст"
+    assert grid.header.rowSpan(0, 0) == 2
+    assert grid.header.columnSpan(0, 1) == 2
+    assert grid.header.verticalHeader().isHidden()
+    assert grid.body.item(0, 0).text() == "2.0"
+    assert grid.header.rowHeight(0) == 24
+    assert grid.header.wordWrap() is False
+
+    flow = [[""] * 4 for _ in range(15)]
+    flow[6][1] = "Таблица   . Параметры проточной части"
+    flow[7][1] = "№"
+    flow[7][2] = "Направляющая лопатка"
+    flow[10][1] = "2"
+    flow[10][2] = "2170ТЧ"
+    grid.fill("flow_path", flow, {}, [[8, 3, 8, 4], [8, 2, 9, 2]])
+    assert grid.caption.text() == "Таблица . Параметры проточной части"
+    assert grid.header.item(0, 0).text() == "№"
+    assert grid.header.rowSpan(0, 0) == 2
+    assert grid.header.item(0, 1).text() == "Направляющая лопатка"
+    assert grid.header.columnSpan(0, 1) == 2
+    assert grid.body.item(0, 0).text() == "2"
+    assert grid.body.item(0, 1).text() == "2170ТЧ"
+    assert grid.body.verticalHeader().isHidden()
+    grid.body.item(0, 1).setSelected(True)
+    assert {"sheet_key": "flow_path", "row": 11, "column": 3} in grid.current_sheet_selection()
+    app.processEvents()
+
+
+def test_material_cell_editor_filters_typed_text(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtWidgets import QApplication, QTableWidget, QTableWidgetItem
+
+    app = QApplication.instance() or QApplication([])
+    from desktop.ui.table_page import OPTIONS_ROLE, CellDelegate
+
+    table = QTableWidget(1, 1)
+    item = QTableWidgetItem("")
+    item.setData(OPTIONS_ROLE, ["12Х13", "12Х18Н10Т", "20Х13", "Сталь 20"])
+    table.setItem(0, 0, item)
+    editor = CellDelegate(table).createEditor(table, None, table.model().index(0, 0))
+    completer = editor.completer()
+    assert completer is not None
+    assert completer.filterMode() == Qt.MatchFlag.MatchContains
+    assert editor.count() == 5
+    completer.setCompletionPrefix("12х")
+    assert completer.completionCount() == 2
+    completer.setCompletionPrefix("сталь")
+    assert completer.completionCount() == 1
+    assert completer.currentCompletion() == "Сталь 20"
     app.processEvents()

@@ -86,11 +86,20 @@ def objects_database_path() -> Path:
     return objects_database_dir() / "projects.json"
 
 
+# False — папка «Библиотека материалов» в проекте. True — каталог на файловом сервере.
+USE_FILESERVER_MATERIALS = False
+FILESERVER_MATERIALS_DIR = Path(
+    r"\\Fileserver\утз\10 Служба технического директора\05 СКБт\!Общая\БД Материалов"
+)
+
+
 def materials_database_dir() -> Path:
     configured = str(os.environ.get("GRAND_SUMMARY_MATERIALS_DIR") or "").strip()
     if configured:
         return Path(configured).expanduser()
-    return Path(r"C:\Users\nyagavrilova\Desktop\Гранд СВОДКА (Grand_summer)\БД Материалов")
+    if USE_FILESERVER_MATERIALS:
+        return FILESERVER_MATERIALS_DIR
+    return project_root() / "Библиотека материалов"
 
 
 def db_path() -> Path:

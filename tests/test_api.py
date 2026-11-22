@@ -414,9 +414,10 @@ def test_sync_all_triangle_parameters_replaces_mapped_cells(client):
     objects = client.get("/api/objects").json()
     workbook_id = client.post("/api/workbooks", json={"object_id": objects[0]["id"]}).json()["id"]
     stage_label = client.get(f"/api/workbooks/{workbook_id}/catalog").json()["columns"][0]["label"]
+    sheet_id = client.post(f"/api/workbooks/{workbook_id}/sheets", json={"name": "Лист ИД"}).json()["id"]
     for parameter_key, value in (("r014", "777"), ("r010", "old"), ("r016", "keep")):
         client.post(
-            f"/api/workbooks/{workbook_id}/cells/{parameter_key}/s1/confirm",
+            f"/api/workbooks/{sheet_id}/cells/{parameter_key}/s1/confirm",
             json={"value": value, "comment": "Исходное значение"},
         )
     client.post(
@@ -424,21 +425,20 @@ def test_sync_all_triangle_parameters_replaces_mapped_cells(client):
         files={"file": ("triangle.xlsx", _triangle_sync_file(stage_label), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
     )
 
-    response = client.post(f"/api/workbooks/{workbook_id}/sync-triangles", json={"mode": "all"})
+    response = client.post(f"/api/workbooks/{sheet_id}/sync-triangles", json={"mode": "all"})
     assert response.status_code == 200, response.text
     assert response.json()["updated"] == 4
-    assert response.json()["cleared"] == 2
+    assert response.json()["cleared"] == 0
     cells = {
         (cell["parameter_key"], cell["column_key"]): cell
-        for cell in client.get(f"/api/workbooks/{workbook_id}").json()["cells"]
+        for cell in client.get(f"/api/workbooks/{sheet_id}").json()["cells"]
     }
     assert cells[("r008", "s1")]["value"] == "0,75"
     assert cells[("r009", "s1")]["value"] == "5000"
-    assert cells[("r010", "s1")]["value"] == ""
+    assert cells[("r010", "s1")]["value"] == "old"
     assert cells[("r011", "s1")]["value"] == "0,0356"
     assert cells[("r013", "s1")]["value"] == "1,26"
-    assert cells[("r014", "s1")]["value"] == ""
-    assert cells[("r014", "s1")]["status"] == "empty"
+    assert cells[("r014", "s1")]["value"] == "777"
     assert cells[("r016", "s1")]["value"] == "keep"
 
 
@@ -446,8 +446,9 @@ def test_sync_all_uses_requested_triangle_coordinates(client):
     objects = client.get("/api/objects").json()
     workbook_id = client.post("/api/workbooks", json={"object_id": objects[0]["id"]}).json()["id"]
     stage_label = client.get(f"/api/workbooks/{workbook_id}/catalog").json()["columns"][0]["label"]
+    sheet_id = client.post(f"/api/workbooks/{workbook_id}/sheets", json={"name": "Лист ИД"}).json()["id"]
     client.post(
-        f"/api/workbooks/{workbook_id}/cells/r016/s1/confirm",
+        f"/api/workbooks/{sheet_id}/cells/r016/s1/confirm",
         json={"value": "manual", "comment": "Не переносить автоматически"},
     )
 
@@ -481,15 +482,15 @@ def test_sync_all_uses_requested_triangle_coordinates(client):
     flow_coordinates = next(sheet for sheet in triangle_sheets if sheet["key"] == "flow_path")["coordinate_mapping"]
     assert flow_coordinates["24"] == ["r022"]
 
-    response = client.post(f"/api/workbooks/{workbook_id}/sync-triangles", json={"mode": "all"})
+    response = client.post(f"/api/workbooks/{sheet_id}/sync-triangles", json={"mode": "all"})
     assert response.status_code == 200, response.text
     assert response.json()["updated"] == 24
     cells = {
         (cell["parameter_key"], cell["column_key"]): cell["value"]
-        for cell in client.get(f"/api/workbooks/{workbook_id}").json()["cells"]
+        for cell in client.get(f"/api/workbooks/{sheet_id}").json()["cells"]
     }
     expected = {
-        "r006": "Профиль СЛ", "r007": "104", "r008": "0,5", "r009": "12500",
+        "r006": "Профиль СЛ", "r007": "104°00'00\"", "r008": "0,5", "r009": "12500",
         "r010": "101", "r011": "0,035", "r012": "102", "r013": "100",
         "r014": "52", "r015": "103", "r022": "109", "r026": "110",
         "r035": "111", "r036": "112", "r043": "Профиль РЛ", "r047": "106",

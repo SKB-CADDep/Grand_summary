@@ -466,17 +466,6 @@ def sync_triangle_data(
                 for column_number in coordinate_columns:
                     if column_number <= len(row) and _cell_text(row[column_number - 1]):
                         add_coordinate_source(sheet_key, row_number, column_number)
-        supported_parameters = {
-            parameter_key
-            for sheet_key in imported
-            for targets in TRIANGLE_COORDINATE_MAP.get(sheet_key, {}).values()
-            for parameter_key, _transform in targets
-        }
-        for parameter_key in supported_parameters:
-            for column_key in stage_columns.values():
-                target = (parameter_key, column_key)
-                if target not in desired and target not in conflicts:
-                    desired[target] = ("", "", "")
 
     for target in conflicts:
         desired.pop(target, None)
@@ -508,9 +497,9 @@ def sync_triangle_data(
             raise ValueError("Ячейка заблокирована правилом унификации")
         if cell.status == "draft":
             raise ValueError(f"Сначала сохраните или отмените черновик {parameter_key}/{column_key}")
-        if value == "" and not cell.value:
+        if not value:
             continue
-        if value != "" and cell.value == value and cell.status == "triangle":
+        if cell.value == value and cell.status == "triangle":
             continue
         parameter_label = parameter.get("label", parameter_key)
         column_label = column["label"]

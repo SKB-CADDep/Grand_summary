@@ -161,6 +161,28 @@ QPushButton[circle="true"] {
 }
 QPushButton[circle="true"]:hover { background: #f3f7fc; }
 QPushButton[circle="true"]:disabled { color: #aaa; }
+QPushButton[historyNav="true"] {
+  min-width: 34px;
+  max-width: 34px;
+  width: 34px;
+  height: 28px;
+  padding: 2px;
+  border-radius: 8px;
+  background: transparent;
+  border: 1px solid transparent;
+}
+QPushButton[historyNav="true"]:hover:!disabled {
+  background: #f3f7fc;
+  border-color: #d9e3f0;
+}
+QPushButton[historyNav="true"]:pressed:!disabled {
+  background: #dbeafe;
+  padding: 2px;
+}
+QPushButton[historyNav="true"]:disabled {
+  background: transparent;
+  border-color: transparent;
+}
 QPushButton[included="true"] {
   width: 22px; max-width: 22px; min-width: 22px; height: 22px; padding: 0;
   border-radius: 6px; font-weight: 700;
@@ -203,6 +225,21 @@ QHeaderView::section {
   padding: 2px 6px;
   font-weight: 600;
   font-size: 12px;
+}
+QLabel#table-caption {
+  font-size: 15px;
+  font-weight: 600;
+  color: #1f5e93;
+  padding: 0 12px 6px;
+  background: transparent;
+}
+QTableWidget#guide-table QHeaderView::section:vertical,
+QTableWidget#id-sheet-frozen QHeaderView::section:vertical {
+  width: 0px;
+  max-width: 0px;
+  min-width: 0px;
+  padding: 0;
+  border: none;
 }
 QTableWidget::item:selected {
   border: 2px solid #1565c0;

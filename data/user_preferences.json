@@ -10,5 +10,11 @@
     "history_panel_open": false,
     "history_right_width": 360,
     "history_bottom_height": 260
+  },
+  "nadya": {
+    "history_position": "right",
+    "history_panel_open": false,
+    "history_right_width": 360,
+    "history_bottom_height": 260
   }
 }

@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from html import escape
 
-from PyQt6.QtCore import QEvent, QUrl, Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, QTimer, QUrl, Qt, pyqtSignal
 from PyQt6.QtGui import QAction, QBrush, QColor, QDesktopServices, QFont, QFontMetrics, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QComboBox,
+    QCompleter,
     QFrame,
     QHBoxLayout,
     QHeaderView,
@@ -37,6 +38,14 @@ OPTIONS_ROLE = Qt.ItemDataRole.UserRole + 2
 KIND_ROLE = Qt.ItemDataRole.UserRole + 3
 
 
+def _is_table_caption(label: str) -> bool:
+    text = " ".join((label or "").split()).casefold()
+    if not text.startswith("таблица"):
+        return False
+    rest = text[len("таблица") :].lstrip(" .–-—")
+    return bool(rest[:1].isdigit())
+
+
 def _status_color(cell: dict | None, row_kind: str) -> QColor | None:
     if row_kind != "editable":
         return QColor(COMPUTED)
@@ -58,16 +67,43 @@ def _status_color(cell: dict | None, row_kind: str) -> QColor | None:
     return None
 
 
+def _show_option_matches(combo: QComboBox, text: str) -> None:
+    completer = combo.completer()
+    if completer is None:
+        return
+    completer.setCompletionPrefix(text)
+    popup = completer.popup()
+    popup.setMinimumWidth(max(combo.width(), 240))
+    if text and completer.completionCount() == 0:
+        popup.hide()
+        return
+    completer.complete()
+
+
+def _option_editor(parent: QWidget, options: list) -> QComboBox:
+    values = [str(value) for value in options if str(value).strip()]
+    combo = QComboBox(parent)
+    combo.setEditable(True)
+    combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+    combo.setMaxVisibleItems(12)
+    combo.addItem("")
+    combo.addItems(values)
+    completer = QCompleter(values, combo)
+    completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+    completer.setFilterMode(Qt.MatchFlag.MatchContains)
+    completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+    combo.setCompleter(completer)
+    line = combo.lineEdit()
+    if line is not None:
+        line.textEdited.connect(lambda text, box=combo: _show_option_matches(box, text))
+    return combo
+
+
 class CellDelegate(QStyledItemDelegate):
     def createEditor(self, parent, option, index):  # noqa: N802
         options = index.data(OPTIONS_ROLE) or []
         if options:
-            combo = QComboBox(parent)
-            combo.setEditable(True)
-            combo.addItem("")
-            for value in options:
-                combo.addItem(str(value))
-            return combo
+            return _option_editor(parent, options)
         editor = QLineEdit(parent)
         editor.setFrame(False)
         return editor
@@ -80,6 +116,7 @@ class CellDelegate(QStyledItemDelegate):
                 editor.setCurrentIndex(pos)
             else:
                 editor.setEditText(str(text))
+            QTimer.singleShot(0, lambda box=editor: _show_option_matches(box, box.currentText()))
             return
         editor.setText(str(text))
 
@@ -195,6 +232,7 @@ class TablePage(QWidget):
         self._hover_keys: tuple[str, str] | None = None
         self._draft_save_target: tuple[str, str] | None = None
         self._history_sizes = {"right": 360, "bottom": 260}
+        self._shown_parameters: list[dict] = []
 
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
@@ -344,6 +382,13 @@ class TablePage(QWidget):
         self.sheet_bar.sheet_selected.connect(self._sheet_changed)
         self.sheet_bar.menu_requested.connect(self._sheet_menu_at)
         root.addWidget(self.sheet_bar)
+
+        self.table_caption = QLabel()
+        self.table_caption.setObjectName("table-caption")
+        self.table_caption.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.table_caption.setWordWrap(True)
+        self.table_caption.hide()
+        root.addWidget(self.table_caption)
 
         split = QSplitter()
         split.setOrientation(Qt.Orientation.Horizontal)
@@ -628,7 +673,7 @@ class TablePage(QWidget):
             return
         self._cells[f"{param}:{column}"] = cell
         text = cell.get("display") or cell.get("draft_value") or cell.get("value") or ""
-        parameters = (self.catalog or {}).get("parameters") or []
+        parameters = self._shown_parameters
         columns = (self.catalog or {}).get("columns") or []
         row = next((index for index, item in enumerate(parameters) if item.get("key") == param), -1)
         col = next((index for index, item in enumerate(columns) if item.get("key") == column), -1)
@@ -653,6 +698,13 @@ class TablePage(QWidget):
             self.table.blockSignals(False)
         self._refresh_hints()
 
+    def _hide_row_numbers(self) -> None:
+        for grid in (self.table, self.table.frozen):
+            header = grid.verticalHeader()
+            header.setVisible(False)
+            header.setFixedWidth(0)
+            grid.setCornerButtonEnabled(False)
+
     def _rebuild_table(self) -> None:
         catalog = self.catalog
         self._rebuilding = True
@@ -660,11 +712,28 @@ class TablePage(QWidget):
         try:
             self.table.clear()
             if not catalog:
+                self._shown_parameters = []
+                self.table_caption.clear()
+                self.table_caption.hide()
                 self.table.setRowCount(0)
                 self.table.setColumnCount(0)
                 return
             columns = catalog.get("columns") or []
-            parameters = catalog.get("parameters") or []
+            titles: list[str] = []
+            parameters = []
+            for param in catalog.get("parameters") or []:
+                label = param.get("label") or ""
+                if _is_table_caption(label):
+                    titles.append(" ".join(label.split()))
+                else:
+                    parameters.append(param)
+            if not titles:
+                sheet_name = (self.workbook or {}).get("sheet_name") or ""
+                if _is_table_caption(sheet_name):
+                    titles.append(" ".join(sheet_name.split()))
+            self._shown_parameters = parameters
+            self.table_caption.setText("\n".join(titles))
+            self.table_caption.setVisible(bool(titles))
             self.table.setColumnCount(2 + len(columns))
             self.table.setRowCount(len(parameters))
             self.table.setHorizontalHeaderLabels(["Наименование параметра", "Ед. изм."] + [col.get("label") or "" for col in columns])
@@ -674,7 +743,7 @@ class TablePage(QWidget):
             header.resizeSection(1, 80)
             header.setMinimumSectionSize(48)
             self.table.verticalHeader().setDefaultSectionSize(22)
-            self.table.verticalHeader().setVisible(False)
+            self._hide_row_numbers()
             for row, param in enumerate(parameters):
                 label = param.get("label") or ""
                 unit = param.get("unit") or ""
@@ -719,6 +788,7 @@ class TablePage(QWidget):
             header.resizeSection(0, 340)
             header.resizeSection(1, 80)
             self.table.sync_frozen()
+            self._hide_row_numbers()
             if self._selected:
                 self._apply_highlight(*self._selected)
         finally:
@@ -771,7 +841,7 @@ class TablePage(QWidget):
 
     def _apply_highlight(self, parameter_key: str, column_key: str) -> None:
         catalog = self.catalog or {}
-        parameters = catalog.get("parameters") or []
+        parameters = self._shown_parameters
         columns = catalog.get("columns") or []
         sel_row = next((i for i, item in enumerate(parameters) if item.get("key") == parameter_key), -1)
         sel_col = next((i for i, item in enumerate(columns) if item.get("key") == column_key), -1)
@@ -822,7 +892,7 @@ class TablePage(QWidget):
                 self._select_keys(*keys)
                 return
         if not keys:
-            parameters = (self.catalog or {}).get("parameters") or []
+            parameters = self._shown_parameters
             if 0 <= row < len(parameters):
                 self.struct_label.blockSignals(True)
                 param = parameters[row]
@@ -868,7 +938,7 @@ class TablePage(QWidget):
 
     def _cell_value(self, parameter_key: str, column_key: str) -> str:
         cell = self._cells.get(f"{parameter_key}:{column_key}") or {}
-        parameters = (self.catalog or {}).get("parameters") or []
+        parameters = self._shown_parameters
         columns = (self.catalog or {}).get("columns") or []
         row = next((index for index, item in enumerate(parameters) if item.get("key") == parameter_key), -1)
         col = next((index for index, item in enumerate(columns) if item.get("key") == column_key), -1)
@@ -876,6 +946,9 @@ class TablePage(QWidget):
         if item:
             return item.text()
         return cell.get("display") or cell.get("draft_value") or cell.get("value") or ""
+
+    def commit_editor(self) -> None:
+        self._commit_editor()
 
     def _commit_editor(self) -> None:
         if self.table.state() == QAbstractItemView.State.EditingState:

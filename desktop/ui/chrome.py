@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from PyQt6.QtCore import QEvent, QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QFont, QFontMetrics
+from PyQt6.QtGui import QFont, QFontMetrics, QIcon
 from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -56,16 +56,10 @@ class MenuBar(QFrame):
         self.hist_bottom = self.view_menu.addAction("Снизу", lambda: self.history_position_requested.emit("bottom"))
         self.view_btn.setMenu(self.view_menu)
 
-        self.undo_btn = QPushButton()
-        self.undo_btn.setProperty("circle", True)
-        self.undo_btn.setIcon(undo_icon())
-        self.undo_btn.setToolTip("Отменить (Ctrl+Z)")
+        self.undo_btn = self._history_btn(undo_icon(), "Отменить", "Отменить (Ctrl+Z)")
         self.undo_btn.setObjectName("guide-undo")
         self.undo_btn.clicked.connect(self.undo_requested.emit)
-        self.redo_btn = QPushButton()
-        self.redo_btn.setProperty("circle", True)
-        self.redo_btn.setIcon(redo_icon())
-        self.redo_btn.setToolTip("Повторить (Ctrl+Y)")
+        self.redo_btn = self._history_btn(redo_icon(), "Повторить", "Повторить (Ctrl+Y)")
         self.redo_btn.clicked.connect(self.redo_requested.emit)
 
         self.help_btn = self._menu_btn("Справка")
@@ -109,6 +103,18 @@ class MenuBar(QFrame):
         button = QPushButton(text)
         button.setProperty("flatMenu", True)
         button.setFlat(True)
+        return button
+
+    def _history_btn(self, icon: QIcon, name: str, tip: str) -> QPushButton:
+        button = QPushButton()
+        button.setProperty("historyNav", True)
+        button.setIcon(icon)
+        button.setIconSize(QSize(20, 20))
+        button.setFixedSize(34, 28)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        button.setAccessibleName(name)
+        button.setToolTip(tip)
         return button
 
     def set_user(self, username: str, can_write: bool) -> None:
