@@ -18,7 +18,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from desktop.ui.style import COMPUTED, CONFIRMED, DRAFT, HEADER_BG, IMPORTED, PARAM_BG, SECTION_BG, UNIFIED
+from desktop.ui.style import COMPUTED, CONFIRMED, DRAFT, HEADER_BG, PARAM_BG, SECTION_BG, UNIFIED
+from src.services.report_generation import SHORT_NOZZLE_ROWS, SHORT_ROTOR_ROWS
 
 HEADER_LINE = QColor("#d9e3f0")
 HEADER_TEXT = QColor("#263238")
@@ -36,6 +37,15 @@ _COLUMN_GROUP_TITLES = {
     "pku": "ПКУ",
     "zku": "ЗКУ",
 }
+_SHORT_PARAMETER_KEYS = {key for key, _label in (*SHORT_NOZZLE_ROWS, *SHORT_ROTOR_ROWS)} | {"r098", "r099", "r100"}
+
+
+def _saved_change(cell: dict) -> bool:
+    if (cell.get("status") or "") == "draft":
+        return False
+    if cell.get("excel_highlight"):
+        return True
+    return (cell.get("status") or "") in {"confirmed", "triangle"}
 
 
 def section_descendants(parameters: list[dict]) -> dict[str, list[str]]:
@@ -122,8 +132,6 @@ def _status_brush(cell: dict | None, row_kind: str) -> QBrush | None:
         return QBrush(QColor(DRAFT))
     if status == "confirmed":
         return QBrush(QColor(CONFIRMED))
-    if cell.get("excel_highlight"):
-        return QBrush(QColor(IMPORTED))
     if status == "computed":
         return QBrush(QColor(COMPUTED))
     return None
@@ -340,6 +348,7 @@ class ReportPage(QWidget):
         self._section_descendants: dict[str, list[str]] = {}
         self._sheet_id = ""
         self._busy = False
+        self._reselect = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 10, 12, 10)
@@ -352,9 +361,11 @@ class ReportPage(QWidget):
         type_label.setProperty("role", "hint")
         type_box.addWidget(type_label)
         self.type_combo = QComboBox()
+        self.type_combo.addItem("Кастомный отчет", "custom")
         self.type_combo.addItem("Исходные данные по проточной части", "short")
         self.type_combo.addItem("Исходные данные по облопачиванию", "full")
         self.type_combo.setMinimumWidth(280)
+        self.type_combo.currentIndexChanged.connect(self._type_changed)
         type_box.addWidget(self.type_combo)
         toolbar.addLayout(type_box)
         sheet_box = QVBoxLayout()
@@ -422,12 +433,9 @@ class ReportPage(QWidget):
         self._sheet_id = next_id
         self._catalog = catalog
         self._cells = {f"{cell.get('parameter_key')}:{cell.get('column_key')}": cell for cell in cells}
-        if catalog and sheet_changed:
-            confirmed = [cell for cell in cells if cell.get("status") == "confirmed"]
-            param_keys = {item["key"] for item in catalog.get("parameters") or [] if item.get("row_kind") != "section"}
-            col_keys = {item["key"] for item in catalog.get("columns") or []}
-            self._included_params = {cell["parameter_key"] for cell in confirmed if cell.get("parameter_key") in param_keys}
-            self._included_cols = {cell["column_key"] for cell in confirmed if cell.get("column_key") in col_keys}
+        if catalog and (sheet_changed or self._reselect):
+            self._apply_type_selection()
+            self._reselect = False
         self._rebuild()
         self._refresh_actions()
         self.empty.setVisible(catalog is None)
@@ -436,7 +444,46 @@ class ReportPage(QWidget):
         return str(self.sheet_combo.currentData() or "")
 
     def current_type(self) -> str:
-        return str(self.type_combo.currentData() or "short")
+        return str(self.type_combo.currentData() or "custom")
+
+    def use_custom_report(self) -> None:
+        self.type_combo.blockSignals(True)
+        index = self.type_combo.findData("custom")
+        if index >= 0:
+            self.type_combo.setCurrentIndex(index)
+        self.type_combo.blockSignals(False)
+        self._reselect = True
+        if self._catalog is not None:
+            self._apply_type_selection()
+            self._reselect = False
+            self._rebuild()
+            self._refresh_actions()
+
+    def _type_changed(self) -> None:
+        if self._catalog is None:
+            return
+        self._apply_type_selection()
+        self._rebuild()
+        self._refresh_actions()
+
+    def _apply_type_selection(self) -> None:
+        catalog = self._catalog or {}
+        parameters = [item for item in catalog.get("parameters") or [] if item.get("row_kind") != "section" and item.get("key")]
+        columns = [item for item in catalog.get("columns") or [] if item.get("key")]
+        kind = self.current_type()
+        if kind == "full":
+            self._included_params = {item["key"] for item in parameters}
+            self._included_cols = {item["key"] for item in columns}
+            return
+        if kind == "short":
+            self._included_params = {item["key"] for item in parameters if item["key"] in _SHORT_PARAMETER_KEYS}
+            self._included_cols = {item["key"] for item in columns if item.get("kind") in {"stage", "pku", "zku"}}
+            return
+        param_keys = {item["key"] for item in parameters}
+        col_keys = {item["key"] for item in columns}
+        saved = [cell for cell in self._cells.values() if _saved_change(cell)]
+        self._included_params = {cell.get("parameter_key") for cell in saved if cell.get("parameter_key") in param_keys}
+        self._included_cols = {cell.get("column_key") for cell in saved if cell.get("column_key") in col_keys}
 
     def _sheet_changed(self) -> None:
         sheet_id = self.current_sheet_id()

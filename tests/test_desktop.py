@@ -51,6 +51,8 @@ def test_native_ui_imports_without_webengine():
     assert "Показать историю" in table_source
     assert "Добавить ссылку" in table_source
     assert "структуру шапки" in table_source
+    assert "clear_highlight_btn" not in table_source
+    assert "Снять оранжевую подсветку" in table_source
     assert "edit_btn.setVisible" in table_source
     report_source = inspect.getsource(ReportPage)
     assert "Предпросмотр таблицы" in report_source
@@ -89,6 +91,29 @@ def test_native_ui_imports_without_webengine():
     assert _status_color({"status": "initial", "excel_highlight": True}, "editable", show_changes=False) is None
     assert _status_color({"status": "computed"}, "editable").name() == COMPUTED
     assert _status_color({"status": "empty"}, "section").name() == COMPUTED
+
+
+def test_clear_orange_highlight_is_a_context_action(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication, QMenu
+
+    app = QApplication.instance() or QApplication([])
+    from desktop.ui.table_page import TablePage
+
+    page = TablePage()
+    page.can_write = True
+    hidden = QMenu()
+    page._add_clear_highlight_action(hidden)
+    assert hidden.actions() == []
+    page._cells = {"r010:s1": {"excel_highlight": True}}
+    shown = QMenu()
+    page._add_clear_highlight_action(shown)
+    labels = [action.text() for action in shown.actions() if action.text()]
+    assert labels == ["Снять оранжевую подсветку"]
+    page.close()
+    hidden.close()
+    shown.close()
+    app.processEvents()
 
 
 def test_object_search_popup_closes_after_pick(monkeypatch):
@@ -246,6 +271,138 @@ def test_triangle_grid_hides_preamble_and_keeps_excel_coords(monkeypatch):
     app.processEvents()
 
 
+def test_triangle_grid_hides_trailing_empty_columns(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    from desktop.ui.triangle_page import TriangleGrid
+
+    rows = [[""] * 12 for _ in range(12)]
+    rows[10][1] = "1"
+    rows[10][3] = "800"
+    grid = TriangleGrid()
+    grid.fill("source", rows, {})
+    assert grid.body.columnCount() == 3
+    assert grid.body.item(0, 0).text() == "1"
+    assert grid.body.item(0, 2).text() == "800"
+
+    rows[7][1] = "Шапка"
+    grid.fill("source", rows, {}, [[8, 2, 8, 6]])
+    assert grid.header.columnCount() == 5
+    app.processEvents()
+
+
+def test_triangle_designation_tooltip_names_id_parameter(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    from desktop.ui.triangle_page import TrianglePage
+
+    rows = [[""] * 6 for _ in range(12)]
+    rows[7][2] = "Направляющая лопатка"
+    rows[8][2] = "e,"
+    rows[8][3] = "хв-ка"
+    rows[9][2] = "мм"
+    rows[10][2] = "100"
+    page = TrianglePage()
+    page.set_data(
+        [
+            {
+                "key": "geometry",
+                "name": "Геом. данные",
+                "rows": rows,
+                "merged_ranges": [[8, 3, 8, 4]],
+                "coordinate_mapping": {"3": ["r011"], "4": ["r060", "r061"]},
+            }
+        ],
+        [],
+        False,
+        False,
+    )
+    assert page.grid.header.item(1, 1).toolTip() == ""
+    page.set_catalog(
+        {
+            "parameters": [
+                {"key": "r011", "label": "Парциальность (e,)", "row_kind": "editable"},
+                {"key": "r060", "label": "Тип (Профиль)", "row_kind": "editable"},
+                {"key": "r061", "label": "Чертеж профиля хвостовика (профиль)", "row_kind": "editable"},
+            ]
+        }
+    )
+    assert page.grid.header.item(1, 1).text() == "e,"
+    assert page.grid.header.item(1, 1).toolTip() == "Таблица ИД: Парциальность"
+    assert page.grid.header.item(2, 1).toolTip() == "Таблица ИД: Парциальность"
+    assert page.grid.header.item(0, 1).toolTip() == ""
+    assert "Тип" in page.grid.header.item(1, 2).toolTip()
+    assert "Чертеж профиля хвостовика" in page.grid.header.item(1, 2).toolTip()
+    assert page.grid.body.item(0, 1).toolTip() == ""
+    app.processEvents()
+
+
+def test_unmapped_parameter_picker_is_a_searchable_tree(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    from desktop.ui.triangle_page import TrianglePage
+
+    page = TrianglePage()
+    page.set_catalog(
+        {
+            "parameters": [
+                {"key": "r005", "label": "Сопловая лопатка:", "row_kind": "section", "indent": 0},
+                {
+                    "key": "r007",
+                    "label": "Угол установки профиля в корневом сечении (α'уст)",
+                    "row_kind": "editable",
+                    "indent": 1,
+                },
+                {
+                    "key": "r010",
+                    "label": "Высота сопловой лопатки (L'), мм",
+                    "row_kind": "editable",
+                    "indent": 1,
+                    "unit": "мм",
+                },
+                {"key": "r017", "label": "Диафрагма:", "row_kind": "section", "indent": 0},
+                {"key": "r021", "label": "Тип исполнения", "row_kind": "editable", "indent": 1},
+            ]
+        }
+    )
+    combo = page.param_combo
+    assert combo.currentData() == ""
+    assert combo._label.text() == "Не задан"
+    assert combo._tree.topLevelItemCount() == 3
+    nozzle = combo._tree.topLevelItem(1)
+    diaphragm = combo._tree.topLevelItem(2)
+    assert nozzle.text(0) == "Сопловая лопатка:"
+    assert nozzle.childCount() == 2
+    assert nozzle.isExpanded() is False
+    nozzle.setExpanded(True)
+    assert nozzle.isExpanded() is True
+    nozzle.setExpanded(False)
+    assert nozzle.isExpanded() is False
+    combo._item_clicked(nozzle, 0)
+    assert combo.currentData() == ""
+    height = nozzle.child(1)
+    assert "Высота сопловой лопатки" in height.text(0)
+    combo._search.setText("высота")
+    assert nozzle.isHidden() is False
+    assert nozzle.isExpanded() is True
+    assert nozzle.child(0).isHidden() is True
+    assert height.isHidden() is False
+    assert diaphragm.isHidden() is True
+    combo._item_clicked(height, 0)
+    assert combo.currentData() == "r010"
+    assert "Высота сопловой лопатки" in combo._label.text()
+    combo._search.setText("")
+    combo._item_clicked(combo._tree.topLevelItem(0), 0)
+    assert combo.currentData() == ""
+    app.processEvents()
+
+
 def test_triangle_caption_and_flow_path_number_column(monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     from PyQt6.QtWidgets import QApplication
@@ -266,6 +423,22 @@ def test_triangle_caption_and_flow_path_number_column(monkeypatch):
     assert grid.header.rowCount() == 2
     assert grid.header.item(0, 0).text() == "№ст"
     assert grid.header.rowSpan(0, 0) == 2
+    assert grid.header_stage.item(0, 0).text() == "№ст"
+    assert grid.header_stage.rowSpan(0, 0) == 2
+    assert grid.header_stage.columnCount() == 1
+    assert grid.body_stage.item(0, 0).text() == "2.0"
+    grid.resize(220, 240)
+    grid.body.setColumnWidth(1, 600)
+    grid.header.setColumnWidth(1, 600)
+    grid.show()
+    app.processEvents()
+    pinned = grid.body_stage.x()
+    grid.body.horizontalScrollBar().setValue(grid.body.horizontalScrollBar().maximum())
+    app.processEvents()
+    assert grid.body_stage.x() == pinned
+    assert grid.body_stage.isVisible()
+    assert grid.body_stage.item(0, 0).text() == "2.0"
+    assert grid.header_stage.item(0, 0).text() == "№ст"
     assert grid.header.columnSpan(0, 1) == 2
     assert grid.header.verticalHeader().isHidden()
     assert grid.body.item(0, 0).text() == "2.0"
@@ -281,11 +454,18 @@ def test_triangle_caption_and_flow_path_number_column(monkeypatch):
     grid.fill("flow_path", flow, {}, [[8, 3, 8, 4], [8, 2, 9, 2]])
     assert grid.caption.text() == "Таблица . Параметры проточной части"
     assert grid.header.item(0, 0).text() == "№"
+    assert grid.header_stage.item(0, 0).text() == "№"
+    assert grid.body_stage.item(0, 0).text() == "2"
     assert grid.header.rowSpan(0, 0) == 2
     assert grid.header.item(0, 1).text() == "Направляющая лопатка"
     assert grid.header.columnSpan(0, 1) == 2
     assert grid.body.item(0, 0).text() == "2"
     assert grid.body.item(0, 1).text() == "2170ТЧ"
+    flow[7][2] = "Площадь, мм2"
+    flow[10][2] = "12Х13"
+    grid.fill("flow_path", flow, {}, [[8, 3, 8, 4], [8, 2, 9, 2]])
+    assert grid.header.item(0, 1).text() == "Площадь, мм²"
+    assert grid.body.item(0, 1).text() == "12Х13"
     assert grid.body.verticalHeader().isHidden()
     grid.body.item(0, 1).setSelected(True)
     assert {"sheet_key": "flow_path", "row": 11, "column": 3} in grid.current_sheet_selection()
@@ -314,6 +494,54 @@ def test_material_cell_editor_filters_typed_text(monkeypatch):
     completer.setCompletionPrefix("сталь")
     assert completer.completionCount() == 1
     assert completer.currentCompletion() == "Сталь 20"
+    app.processEvents()
+
+
+def test_id_table_link_cell_uses_pointing_hand(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtCore import QEvent, Qt
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    from desktop.ui.table_page import DATA_COLUMN, TablePage
+
+    page = TablePage()
+    page.set_data(
+        object_name="Объект",
+        catalog={
+            "columns": [{"key": "s1", "label": "1"}],
+            "parameters": [
+                {"key": "r010", "label": "Высота сопловой лопатки (L'), мм", "row_kind": "editable", "indent": 1, "unit": "мм"},
+            ],
+        },
+        workbook={
+            "id": "sheet",
+            "is_primary": False,
+            "is_issued": False,
+            "cells": [
+                {
+                    "parameter_key": "r010",
+                    "column_key": "s1",
+                    "value": "120",
+                    "display": "120",
+                    "hyperlink": "https://example.test/drawing",
+                    "status": "confirmed",
+                }
+            ],
+        },
+        unsaved=[],
+        sheets=[{"id": "sheet", "name": "Лист", "is_primary": False}],
+        can_write=True,
+        busy=False,
+    )
+    page._cell_entered(0, DATA_COLUMN)
+    assert page.table.viewport().cursor().shape() == Qt.CursorShape.PointingHandCursor
+    assert page.table.item(0, DATA_COLUMN).toolTip() == "Нажмите Ctrl+ЛКМ, чтобы открыть ссылку"
+    page._cell_entered(0, 1)
+    assert page.table.viewport().cursor().shape() == Qt.CursorShape.ArrowCursor
+    page._cell_entered(0, DATA_COLUMN)
+    page.eventFilter(page.table.viewport(), QEvent(QEvent.Type.Leave))
+    assert page.table.viewport().cursor().shape() == Qt.CursorShape.ArrowCursor
     app.processEvents()
 
 
@@ -388,6 +616,30 @@ def test_parameter_names_fit_on_one_line(monkeypatch):
     assert page.table.item(1, 2).text() == "α'уст"
     assert page.table.item(1, 3).text() == "°"
     assert "\n" not in page.table.item(1, 2).text()
+    longer = "Ширина профиля в рабочем положении (корневое сечение)"
+    page.set_data(
+        object_name="Объект",
+        catalog={
+            "columns": [{"key": "s1", "label": "1"}],
+            "parameters": [
+                {"key": "r004", "excel_row": 4, "label": "Характеристики проточной части:", "row_kind": "section", "indent": 0},
+                {"key": "r005", "excel_row": 5, "label": "Сопловая лопатка:", "row_kind": "section", "indent": 0},
+                {"key": "r006", "excel_row": 6, "label": "Чертеж теоретического профиля (Профиль)", "row_kind": "editable", "indent": 1},
+                {"key": "r007", "excel_row": 7, "label": long_name, "row_kind": "editable", "indent": 1, "unit": "°"},
+                {"key": "r012", "excel_row": 12, "label": longer + " (B'к), мм", "row_kind": "editable", "indent": 1, "unit": "мм"},
+            ],
+        },
+        workbook={"id": "sheet", "is_primary": True, "is_issued": False, "cells": [], "sheet_name": "Исходные данные"},
+        unsaved=[],
+        sheets=[{"id": "sheet", "name": "Исходные данные", "is_primary": True}],
+        can_write=True,
+        busy=False,
+    )
+    reference = page.table.item(3, 1).text()
+    assert "Угол установки профиля в корневом сечении" in reference
+    fitted = QFontMetrics(page.table.font()).horizontalAdvance(reference) + 28
+    assert page.table.columnWidth(1) >= fitted
+    assert page.table.columnWidth(1) < QFontMetrics(page.table.font()).horizontalAdvance(page.table.item(4, 1).text())
     plain = {
         "key": "r004",
         "label": "Базовая конструкция (турбина, ступень)",
@@ -414,6 +666,96 @@ def test_parameter_names_fit_on_one_line(monkeypatch):
     assert page.history_table.item(0, 4).text() == "Данные из основного листа"
     assert page.history_table.item(1, 4).text() == "Изменение листа «15.03.2026»"
     assert page.history_table.item(2, 4).text() == "Изменение листа «01.04.2026»"
+
+
+def test_id_table_units_use_superscript(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    from desktop.ui.table_page import UNIT_ROLE, TablePage, format_unit
+
+    assert format_unit("мм2") == "мм²"
+    assert format_unit("мм3") == "мм³"
+    assert format_unit("кг/см2") == "кг/см²"
+    assert format_unit("м-1") == "м⁻¹"
+    assert format_unit("мм^2") == "мм²"
+    assert format_unit("мм") == "мм"
+    assert format_unit("°") == "°"
+    assert format_unit("Площадь, мм2") == "Площадь, мм²"
+    assert format_unit("12Х13") == "12Х13"
+    assert format_unit("15Х1М1Ф") == "15Х1М1Ф"
+    assert format_unit("2170ТЧ") == "2170ТЧ"
+    assert format_unit("К-230-12,8") == "К-230-12,8"
+    page = TablePage()
+    page.set_data(
+        object_name="Объект",
+        catalog={
+            "columns": [{"key": "s1", "label": "1", "kind": "stage"}],
+            "parameters": [
+                {"key": "r009", "label": "Теоретическая выходная площадь (Fc,), мм2", "row_kind": "editable", "unit": "мм2"},
+                {"key": "r010", "label": "Высота сопловой лопатки, мм", "row_kind": "editable", "unit": "мм"},
+            ],
+        },
+        workbook={"id": "sheet", "is_primary": True, "is_issued": False, "cells": [], "sheet_name": "Исходные данные"},
+        unsaved=[],
+        sheets=[{"id": "sheet", "name": "Исходные данные", "is_primary": True}],
+        can_write=True,
+        busy=False,
+    )
+    assert page.table.item(0, 3).text() == "мм²"
+    assert page.table.item(0, 3).data(UNIT_ROLE) == "мм2"
+    assert page.table.frozen.item(0, 3).text() == "мм²"
+    assert page.table.item(1, 3).text() == "мм"
+    page._select_keys("r009", "s1", emit=False)
+    assert "мм²" in page.cell_caption.text()
+
+
+def test_stage_columns_follow_row_15(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtGui import QFontMetrics
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    from desktop.ui.table_page import DATA_COLUMN, TablePage
+
+    page = TablePage()
+    long_value = "Чертеж теоретического профиля очень длинный"
+    page.set_data(
+        object_name="Объект",
+        catalog={
+            "columns": [
+                {"key": "s1", "label": "1", "kind": "stage"},
+                {"key": "s2", "label": "2", "kind": "stage"},
+                {"key": "pku1", "label": "ПКУ", "kind": "pku"},
+            ],
+            "parameters": [
+                {"key": f"r{index:03d}", "excel_row": index, "label": f"Параметр {index}", "row_kind": "editable"}
+                for index in range(4, 16)
+            ],
+        },
+        workbook={
+            "id": "sheet",
+            "is_primary": True,
+            "is_issued": False,
+            "sheet_name": "Исходные данные",
+            "cells": [
+                {"parameter_key": "r015", "column_key": "s1", "display": "Единичные НЛ"},
+                {"parameter_key": "r015", "column_key": "s2", "display": "12"},
+                {"parameter_key": "r006", "column_key": "s1", "display": long_value},
+            ],
+        },
+        unsaved=[],
+        sheets=[{"id": "sheet", "name": "Исходные данные", "is_primary": True}],
+        can_write=True,
+        busy=False,
+    )
+    metrics = QFontMetrics(page.table.font())
+    fitted = metrics.horizontalAdvance("Единичные НЛ") + 20
+    assert page.table.columnWidth(DATA_COLUMN) >= fitted
+    assert page.table.columnWidth(DATA_COLUMN + 1) == page.table.columnWidth(DATA_COLUMN)
+    assert page.table.columnWidth(DATA_COLUMN) < metrics.horizontalAdvance(long_value)
+    assert page.table.columnWidth(DATA_COLUMN + 2) < page.table.columnWidth(DATA_COLUMN)
 
 
 def test_id_table_header_uses_the_same_horizontal_scroll_as_the_body():
@@ -444,6 +786,12 @@ def test_id_table_header_uses_the_same_horizontal_scroll_as_the_body():
     assert not table.horizontalHeader().horizontalScrollBar().isVisible()
     assert table.frozen.horizontalHeader().horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
     assert not table.frozen.horizontalHeader().horizontalScrollBar().isVisible()
+    assert not table.frozen.horizontalHeader().isVisible()
+    table.horizontalHeader().resizeSection(1, 280)
+    app.processEvents()
+    assert table.columnWidth(1) == 280
+    assert table.horizontalHeader().sectionSize(1) == 280
+    assert table.frozen.columnWidth(1) == 280
     table.close()
     app.processEvents()
 
@@ -515,6 +863,57 @@ def test_report_selects_groups_blocks_rows_and_column_groups():
     assert page._included_cols == {"s2"}
     page._toggle_header_group(5)
     assert page._included_cols == {"s2", "pku1"}
+    page.close()
+    app.processEvents()
+
+
+def test_custom_report_starts_selected_and_marks_saved_changes():
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    from desktop.ui.report_page import ReportPage
+
+    page = ReportPage()
+    assert page.current_type() == "custom"
+    assert page.type_combo.currentText() == "Кастомный отчет"
+    catalog = {
+        "columns": [
+            {"key": "s1", "label": "1", "kind": "stage"},
+            {"key": "s2", "label": "2", "kind": "stage"},
+            {"key": "pku1", "label": "1 ПКУ", "kind": "pku"},
+        ],
+        "parameters": [
+            {"key": "nozzle", "label": "Сопловая лопатка:", "row_kind": "section", "indent": 0},
+            {"key": "r010", "label": "Высота", "row_kind": "editable", "indent": 1},
+            {"key": "r011", "label": "Парциальность", "row_kind": "editable", "indent": 1},
+            {"key": "r047", "label": "Высота рабочих", "row_kind": "editable", "indent": 1},
+        ],
+    }
+    page.set_table_data(
+        catalog,
+        [
+            {"parameter_key": "r010", "column_key": "s1", "status": "confirmed", "value": "46"},
+            {"parameter_key": "r011", "column_key": "s2", "status": "draft", "value": "1"},
+            {"parameter_key": "r047", "column_key": "pku1", "status": "initial", "excel_highlight": True, "value": "20"},
+        ],
+        sheet_id="sheet",
+    )
+    assert page._included_params == {"r010", "r047"}
+    assert page._included_cols == {"s1", "pku1"}
+    page.type_combo.setCurrentIndex(page.type_combo.findData("short"))
+    assert page.current_type() == "short"
+    assert page._included_params == {"r010", "r047"}
+    assert page._included_cols == {"s1", "s2", "pku1"}
+    page.type_combo.setCurrentIndex(page.type_combo.findData("full"))
+    assert page._included_params == {"r010", "r011", "r047"}
+    assert page._included_cols == {"s1", "s2", "pku1"}
+    page.use_custom_report()
+    assert page.current_type() == "custom"
+    assert page._included_params == {"r010", "r047"}
+    assert page._included_cols == {"s1", "pku1"}
+    from desktop.ui.report_page import _status_brush
+
+    assert _status_brush({"status": "initial", "excel_highlight": True}, "editable") is None
     page.close()
     app.processEvents()
 

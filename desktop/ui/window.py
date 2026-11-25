@@ -507,7 +507,8 @@ class MainWindow(QMainWindow):
             self.triangles = result.get("sheets") or []
             self.tab = "triangles"
             self._refresh_pages()
-            self._info("Импортированы листы «Геом. данные» и «Проточная часть».")
+            names = "», «".join(sheet.get("name") or sheet.get("key") or "" for sheet in self.triangles)
+            self._info(f"Импортированы листы «{names}».")
         except Exception as exc:
             self._fail(exc)
         finally:
@@ -567,6 +568,7 @@ class MainWindow(QMainWindow):
     def _compose_report(self) -> None:
         if not self._remind_drafts():
             return
+        self.report_page.use_custom_report()
         self.tab = "report"
         self._refresh_pages()
         if self.workbook and self.catalog:
@@ -895,6 +897,8 @@ class MainWindow(QMainWindow):
             if not self._remind_drafts():
                 self.tab_strip.set_current(self.tab)
                 return
+        if next_tab == "report":
+            self.report_page.use_custom_report()
         self.tab = next_tab
         self._refresh_pages()
 

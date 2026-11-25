@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from backend.models import Cell, TriangleSheet, Workbook
 from src.catalog import label_to_column_key, label_to_parameter_key, load_triangle_mapping
 from src.services import workbooks as workbook_service
+from src.services.decimals import normalize_decimal_commas
 from src.services.journal import add_audit
 
 
@@ -32,9 +33,8 @@ def _triangle_cell_text(value) -> str:
             return _cell_text(value)
         if rounded == 0:
             return "0"
-        text = format(rounded, "f").rstrip("0").rstrip(".")
-        return text.replace(".", ",")
-    return _cell_text(value)
+        return format(rounded, "f").rstrip("0").rstrip(".")
+    return normalize_decimal_commas(_cell_text(value)) or ""
 
 
 def _triangle_angle_cell_text(value) -> str:
@@ -43,8 +43,8 @@ def _triangle_angle_cell_text(value) -> str:
             precise = Decimal(str(value))
         except InvalidOperation:
             return _cell_text(value)
-        return format(precise.normalize(), "f").replace(".", ",")
-    return _cell_text(value)
+        return format(precise.normalize(), "f")
+    return normalize_decimal_commas(_cell_text(value)) or ""
 
 
 TRIANGLE_SOURCE_FIELDS: dict[str, tuple[str, ...]] = {
@@ -180,7 +180,7 @@ def _transform_coordinate_value(transform: str, value: str) -> str:
             fraction = percentage / Decimal(100)
         except InvalidOperation as exc:
             raise ValueError("Ожидалось числовое значение для парциальности (e)") from exc
-        return format(fraction.normalize(), "f").replace(".", ",")
+        return format(fraction.normalize(), "f")
     if transform == "profile_type":
         match = re.match(r"\s*([A-Za-zА-Яа-яЁё]+)", value)
         return match.group(1) if match else ""
@@ -192,25 +192,58 @@ def _transform_coordinate_value(transform: str, value: str) -> str:
     return value
 
 
+KNOWN_TRIANGLE_KEYS = {
+    "геом. данные": "geometry",
+    "проточная часть": "flow_path",
+}
+
+
+def triangle_sheet_sort_key(data: dict[str, Any]) -> tuple:
+    order = data.get("order")
+    name = str(data.get("name") or data.get("key") or "")
+    if isinstance(order, int):
+        return (0, order, name)
+    legacy = {"geometry": 0, "flow_path": 1}
+    return (1, legacy.get(str(data.get("key") or ""), 100), name)
+
+
+def used_column_count(rows: list, merged_ranges: list | None = None) -> int:
+    """Последний столбец, в котором есть значение или объединённая ячейка."""
+    last = 0
+    for row in rows:
+        for index in range(len(row) - 1, -1, -1):
+            if str(row[index] or "").strip():
+                last = max(last, index + 1)
+                break
+    for merge in merged_ranges or []:
+        if len(merge) >= 4:
+            last = max(last, int(merge[3] or 0))
+    return last
+
+
+def _triangle_sheet_key(title: str, used: set[str]) -> str:
+    key = KNOWN_TRIANGLE_KEYS.get(title.strip().casefold()) or title.strip()[:32] or "sheet"
+    base = key
+    suffix = 2
+    while key in used:
+        tail = f"_{suffix}"
+        key = base[: 32 - len(tail)] + tail
+        suffix += 1
+    used.add(key)
+    return key
+
+
 def parse_triangle_sheets(file_obj) -> list[dict[str, Any]]:
-    required_sheets = {
-        "геом. данные": ("geometry", "Геом. данные"),
-        "проточная часть": ("flow_path", "Проточная часть"),
-    }
     try:
         workbook = load_workbook(file_obj, data_only=True)
     except Exception as exc:
         raise ValueError("Не удалось прочитать Excel-файл треугольников") from exc
 
     try:
-        available = {sheet.title.strip().casefold(): sheet for sheet in workbook.worksheets}
-        missing = [display_name for normalized, (_, display_name) in required_sheets.items() if normalized not in available]
-        if missing:
-            raise ValueError(f"В файле отсутствуют обязательные листы: {', '.join(missing)}")
-
         parsed: list[dict[str, Any]] = []
-        for normalized, (sheet_key, display_name) in required_sheets.items():
-            sheet = available[normalized]
+        used_keys: set[str] = set()
+        for order, sheet in enumerate(workbook.worksheets):
+            sheet_key = _triangle_sheet_key(sheet.title, used_keys)
             rows = []
             for row_number, row in enumerate(
                 sheet.iter_rows(
@@ -236,9 +269,13 @@ def parse_triangle_sheets(file_obj) -> list[dict[str, Any]]:
                 [cell_range.min_row, cell_range.min_col, cell_range.max_row, cell_range.max_col]
                 for cell_range in sheet.merged_cells.ranges
             ]
+            width = used_column_count(rows, merged_ranges)
+            rows = [row[:width] for row in rows]
+            merged_ranges = [merge for merge in merged_ranges if int(merge[1]) <= width]
             parsed.append({
                 "key": sheet_key,
-                "name": display_name,
+                "name": sheet.title.strip()[:64] or sheet_key,
+                "order": order,
                 "rows": rows,
                 "merged_ranges": merged_ranges,
                 "parameter_mapping": triangle_parameter_mapping(sheet_key),

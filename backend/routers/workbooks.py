@@ -792,11 +792,16 @@ def get_triangle_sheets(
     workbook = _workbook_or_404(session, workbook_id)
     root = workbook.parent or workbook
     sheets = session.query(TriangleSheet).filter(TriangleSheet.workbook_id == root.id).all()
-    by_key = {sheet.sheet_key: json.loads(sheet.data_json) for sheet in sheets}
-    for key, data in by_key.items():
-        data.setdefault("parameter_mapping", triangle_import.triangle_parameter_mapping(key))
-        data.setdefault("coordinate_mapping", triangle_import.triangle_coordinate_mapping(key))
-    return [by_key[key] for key in ("geometry", "flow_path") if key in by_key]
+    parsed = []
+    for sheet in sheets:
+        data = json.loads(sheet.data_json)
+        data.setdefault("key", sheet.sheet_key)
+        data.setdefault("name", sheet.sheet_name)
+        data.setdefault("parameter_mapping", triangle_import.triangle_parameter_mapping(sheet.sheet_key))
+        data.setdefault("coordinate_mapping", triangle_import.triangle_coordinate_mapping(sheet.sheet_key))
+        parsed.append(data)
+    parsed.sort(key=triangle_import.triangle_sheet_sort_key)
+    return parsed
 
 
 @router.post("/workbooks/{workbook_id}/sync-triangles")
@@ -846,7 +851,16 @@ async def import_triangle(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     root = workbook.parent or workbook
+    incoming_keys = {parsed["key"] for parsed in parsed_sheets}
     try:
+        (
+            session.query(TriangleSheet)
+            .filter(
+                TriangleSheet.workbook_id == root.id,
+                TriangleSheet.sheet_key.notin_(incoming_keys),
+            )
+            .delete(synchronize_session=False)
+        )
         for parsed in parsed_sheets:
             stored = (
                 session.query(TriangleSheet)

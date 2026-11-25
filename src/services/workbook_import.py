@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from backend.models import Cell, CellChange, Workbook
 from src.catalog import label_to_column_key, label_to_parameter_key, load_triangle_mapping, parameters
 from src.services import workbooks as workbook_service
+from src.services.decimals import normalize_decimal_commas
 
 SKIP_SHEET_TITLES = {
     "протокол изменений",
@@ -199,7 +200,7 @@ def read_sheet_grid(workbook: Workbook, excel_sheet) -> tuple[dict[tuple[str, st
         for index, column_key in column_keys.items():
             if index >= len(row):
                 continue
-            text = _cell_text(row[index])
+            text = normalize_decimal_commas(_cell_text(row[index])) or ""
             if text:
                 grid[(parameter_key, column_key)] = text
     return grid, parameters_present, columns_present

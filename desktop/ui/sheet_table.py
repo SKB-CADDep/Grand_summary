@@ -109,11 +109,13 @@ class FrozenSheetTable(QTableWidget):
         self.frozen.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.frozen.setWordWrap(False)
         self.frozen.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.frozen.horizontalHeader().hide()
         self.frozen.cellClicked.connect(self.frozen_cell_clicked.emit)
         self.frozen.customContextMenuRequested.connect(self._frozen_menu)
         self.viewport().stackUnder(self.frozen)
 
         self._syncing_scroll = False
+        self._syncing_width = False
         self.horizontalHeader().sectionResized.connect(self._sync_column_width)
         self.verticalHeader().sectionResized.connect(self._sync_row_height)
         self.verticalScrollBar().valueChanged.connect(self._scroll_frozen)
@@ -130,9 +132,12 @@ class FrozenSheetTable(QTableWidget):
         self.header_menu_requested.emit(header.logicalIndexAt(pos), header.mapToGlobal(pos))
 
     def _sync_column_width(self, index: int, _old: int, new: int) -> None:
-        if index < FROZEN_COLUMNS:
-            self.frozen.setColumnWidth(index, new)
-            self._update_frozen_geometry()
+        if self._syncing_width or index >= FROZEN_COLUMNS or index >= self.frozen.columnCount():
+            return
+        self._syncing_width = True
+        self.frozen.setColumnWidth(index, new)
+        self._syncing_width = False
+        self._update_frozen_geometry()
 
     def _sync_row_height(self, index: int, _old: int, new: int) -> None:
         self.frozen.setRowHeight(index, new)
@@ -187,12 +192,16 @@ class FrozenSheetTable(QTableWidget):
             self.frozen.hide()
             return
         self.frozen.show()
+        self.frozen.horizontalHeader().hide()
+        header = self.horizontalHeader()
+        header.raise_()
         width = sum(self.columnWidth(index) for index in range(FROZEN_COLUMNS))
+        top = self.frameWidth() + header.height()
         self.frozen.setGeometry(
             self.frameWidth(),
-            self.frameWidth(),
+            top,
             width,
-            self.viewport().height() + self.horizontalHeader().height(),
+            max(0, self.viewport().height()),
         )
 
     @staticmethod
@@ -228,7 +237,7 @@ class FrozenSheetTable(QTableWidget):
                 self.frozen.setItem(row, col, clone)
         for col in range(FROZEN_COLUMNS):
             self.frozen.setColumnWidth(col, self.columnWidth(col))
-        self.frozen.horizontalHeader().setFixedHeight(self.horizontalHeader().height())
+        self.frozen.horizontalHeader().hide()
         self._lock_header_scrollbars()
         self._sync_header_offset(self.horizontalScrollBar().value())
         self._update_frozen_geometry()

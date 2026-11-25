@@ -32,46 +32,33 @@ from PyQt6.QtWidgets import (
 from desktop.ui.icons import eye_icon, flag_icon, pencil_icon
 from desktop.ui.sheet_table import FROZEN_COLUMNS, FrozenSheetTable
 from desktop.ui.style import COMPUTED, CONFIRMED, DRAFT, HIGHLIGHT, IMPORTED, PARAM_BG, PRIMARY, SECTION_BG, TRIANGLE, UNIFIED
+from src.services.report_generation import parameter_designation, parameter_display_label
 
 PARAM_ROLE = Qt.ItemDataRole.UserRole
 COLUMN_ROLE = Qt.ItemDataRole.UserRole + 1
 OPTIONS_ROLE = Qt.ItemDataRole.UserRole + 2
 KIND_ROLE = Qt.ItemDataRole.UserRole + 3
 DATA_COLUMN = FROZEN_COLUMNS
-_PAREN_GROUPS = re.compile(r"\(([^()]*)\)")
-_SYNCED_PARAMETER_KEYS: set[str] | None = None
+UNIT_ROLE = Qt.ItemDataRole.UserRole + 4
+STAGE_WIDTH_TEXT = "Единичные НЛ"
+_SUPERSCRIPT_DIGITS = str.maketrans("0123456789", "⁰¹²³⁴⁵⁶⁷⁸⁹")
+_UNIT_TOKEN = re.compile(
+    r"(?<![A-Za-zА-Яа-яЁё])((?:мм|см|дм|км|м|с))(?:\^)?([−\-])?(\d+)(?![A-Za-zА-Яа-яЁё])",
+    re.IGNORECASE,
+)
 
 
-def parameter_designation(param: dict) -> str:
-    if (param.get("key") or "") not in _synced_parameter_keys():
+def format_unit(value: str) -> str:
+    """Показывает степень в единице верхним индексом: мм2 → мм², м-1 → м⁻¹."""
+    text = value or ""
+    if not text:
         return ""
-    groups = _PAREN_GROUPS.findall(param.get("label") or "")
-    if not groups:
-        return ""
-    return groups[-1].strip().rstrip(",").strip()
 
+    def replace(match: re.Match[str]) -> str:
+        sign = "⁻" if match.group(2) else ""
+        return match.group(1) + sign + match.group(3).translate(_SUPERSCRIPT_DIGITS)
 
-def parameter_display_label(param: dict) -> str:
-    label = param.get("label") or ""
-    unit = param.get("unit") or ""
-    if unit and label.endswith(f", {unit}"):
-        label = label[: -len(unit) - 2].strip()
-    if parameter_designation(param):
-        match = None
-        for match in _PAREN_GROUPS.finditer(label):
-            pass
-        if match is not None:
-            label = f"{label[: match.start()]}{label[match.end() :]}"
-    return " ".join(label.replace(" ,", " ").split()).strip(" ,")
-
-
-def _synced_parameter_keys() -> set[str]:
-    global _SYNCED_PARAMETER_KEYS
-    if _SYNCED_PARAMETER_KEYS is None:
-        from src.services.triangle_import import triangle_synced_parameter_keys
-
-        _SYNCED_PARAMETER_KEYS = triangle_synced_parameter_keys()
-    return _SYNCED_PARAMETER_KEYS
+    return _UNIT_TOKEN.sub(replace, text)
 
 
 def _is_table_caption(label: str) -> bool:
@@ -289,21 +276,17 @@ class TablePage(QWidget):
         header.addWidget(self.title, 1)
         self.save_btn = QPushButton("Сохранить проект")
         self.import_btn = QPushButton("Импортировать .xlsx")
-        self.clear_highlight_btn = QPushButton("Снять оранжевую подсветку")
-        self.clear_highlight_btn.setToolTip("Убрать оранжевую подсветку истории, собранной из листов Excel")
         self.export_sheet_btn = QPushButton("Выгрузить лист")
         self.export_all_btn = QPushButton("Выгрузить всё")
         self.report_btn = QPushButton("Составить отчет")
         self.save_btn.clicked.connect(self.save_project_requested.emit)
         self.import_btn.clicked.connect(self.import_workbook_requested.emit)
-        self.clear_highlight_btn.clicked.connect(self.clear_excel_highlight_requested.emit)
         self.export_sheet_btn.clicked.connect(self.export_current_requested.emit)
         self.export_all_btn.clicked.connect(self.export_all_requested.emit)
         self.report_btn.clicked.connect(self.compose_report_requested.emit)
         for button in (
             self.save_btn,
             self.import_btn,
-            self.clear_highlight_btn,
             self.export_sheet_btn,
             self.export_all_btn,
             self.report_btn,
@@ -465,6 +448,7 @@ class TablePage(QWidget):
         self.table.currentCellChanged.connect(self._current_changed)
         self.table.setMouseTracking(True)
         self.table.viewport().setMouseTracking(True)
+        self.table.viewport().installEventFilter(self)
         self.table.cellEntered.connect(self._cell_entered)
         split.addWidget(self.table)
 
@@ -612,7 +596,6 @@ class TablePage(QWidget):
         writable = can_write and not busy and has_book
         self.save_btn.setEnabled(writable)
         self.import_btn.setEnabled(writable)
-        self.clear_highlight_btn.setEnabled(writable and self._has_excel_highlight())
         self.export_sheet_btn.setEnabled(has_book and not busy)
         self.export_all_btn.setEnabled(has_book and not busy)
         self.report_btn.setEnabled(has_book and not busy)
@@ -684,6 +667,13 @@ class TablePage(QWidget):
     def _has_excel_highlight(self) -> bool:
         return any(cell.get("excel_highlight") for cell in self._cells.values())
 
+    def _add_clear_highlight_action(self, menu: QMenu) -> None:
+        if not self._has_excel_highlight():
+            return
+        menu.addSeparator()
+        action = menu.addAction("Снять оранжевую подсветку", self.clear_excel_highlight_requested.emit)
+        action.setEnabled(self.can_write and not self.busy)
+
     def _refresh_hints(self) -> None:
         if (self.workbook or {}).get("is_primary"):
             self.mode_hint.setText("Основной лист доступен только для просмотра.")
@@ -695,7 +685,7 @@ class TablePage(QWidget):
             else:
                 self.mode_hint.setText("Жёлтый — черновик, зелёный — сохранено, серый — группа или заблокировано правилом.")
         elif self._has_excel_highlight():
-            self.mode_hint.setText("Оранжевым отмечены изменения между листами Excel. Подсветку можно снять.")
+            self.mode_hint.setText("Оранжевым отмечены изменения между листами Excel. Снять подсветку можно правой кнопкой мыши.")
         else:
             self.mode_hint.setText("Просмотр: значения не меняются. Чтобы править ячейки, включите режим редактирования.")
         if self.unsaved:
@@ -786,10 +776,43 @@ class TablePage(QWidget):
         header_font.setPointSize(10)
         width = QFontMetrics(header_font).horizontalAdvance("Наименование параметра") + 28
         metrics = QFontMetrics(self.table.font())
-        for row in range(self.table.rowCount()):
-            item = self.table.item(row, 1)
-            if item is not None:
-                width = max(width, metrics.horizontalAdvance(item.text()) + 28)
+        item = self._name_width_item()
+        if item is None:
+            for row in range(self.table.rowCount()):
+                current = self.table.item(row, 1)
+                if current is not None:
+                    width = max(width, metrics.horizontalAdvance(current.text()) + 28)
+            return width
+        return max(width, metrics.horizontalAdvance(item.text()) + 28)
+
+    def _name_width_item(self) -> QTableWidgetItem | None:
+        for row, param in enumerate(self._shown_parameters):
+            if int(param.get("excel_row") or 0) == 7 or param.get("key") == "r007":
+                return self.table.item(row, 1)
+        if self.table.rowCount() >= 7:
+            return self.table.item(6, 1)
+        return None
+
+    def _stage_width_row(self) -> int | None:
+        for row, param in enumerate(self._shown_parameters):
+            if int(param.get("excel_row") or 0) == 15 or param.get("key") == "r015":
+                return row
+        if self.table.rowCount() >= 15:
+            return 14
+        return None
+
+    def _stage_column_width(self) -> int:
+        metrics = QFontMetrics(self.table.font())
+        width = metrics.horizontalAdvance(STAGE_WIDTH_TEXT) + 20
+        row = self._stage_width_row()
+        if row is None:
+            return width
+        for index, column in enumerate((self.catalog or {}).get("columns") or []):
+            if column.get("kind") not in (None, "", "stage"):
+                continue
+            item = self.table.item(row, DATA_COLUMN + index)
+            if item is not None and item.text():
+                width = max(width, metrics.horizontalAdvance(item.text()) + 20)
         return width
 
     def _number_column_width(self) -> int:
@@ -879,7 +902,8 @@ class TablePage(QWidget):
                 designation.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 designation.setBackground(row_bg)
                 self.table.setItem(row, 2, designation)
-                unit_item = QTableWidgetItem(unit if editable else "")
+                unit_item = QTableWidgetItem(format_unit(unit) if editable else "")
+                unit_item.setData(UNIT_ROLE, unit)
                 unit_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
                 unit_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 unit_item.setBackground(row_bg)
@@ -918,6 +942,11 @@ class TablePage(QWidget):
             header.resizeSection(1, self._parameter_column_width())
             header.resizeSection(2, self._designation_column_width())
             header.resizeSection(3, 80)
+            stage_width = self._stage_column_width()
+            for index, column in enumerate(columns):
+                if column.get("kind") not in (None, "", "stage"):
+                    continue
+                header.resizeSection(DATA_COLUMN + index, stage_width)
             self.table.sync_frozen()
             self._hide_row_numbers()
             if self._selected:
@@ -936,7 +965,9 @@ class TablePage(QWidget):
             return str(param), str(col)
         if param and column == 1:
             self.struct_label.setText(self.table.item(row, 1).text().strip() if self.table.item(row, 1) else "")
-            self.struct_unit.setText(self.table.item(row, 3).text() if self.table.item(row, 3) else "")
+            unit_item = self.table.item(row, 3)
+            raw_unit = unit_item.data(UNIT_ROLE) if unit_item is not None else ""
+            self.struct_unit.setText("" if raw_unit is None else str(raw_unit))
             return None
         return None
 
@@ -950,7 +981,7 @@ class TablePage(QWidget):
         self._show_cell_link(cell)
         param = next((item for item in (self.catalog or {}).get("parameters") or [] if item.get("key") == parameter_key), None)
         col = next((item for item in (self.catalog or {}).get("columns") or [] if item.get("key") == column_key), None)
-        unit = (param or {}).get("unit") or ""
+        unit = format_unit((param or {}).get("unit") or "")
         label = parameter_display_label(param or {})
         self.cell_caption.setText(f"{label}{', ' + unit if unit else ''} / ступень {(col or {}).get('label') or ''}")
         self.history_empty.hide()
@@ -1014,6 +1045,11 @@ class TablePage(QWidget):
 
     def _cell_entered(self, row: int, column: int) -> None:
         keys = self._keys_at(row, column)
+        cell = self._cells.get(f"{keys[0]}:{keys[1]}") if keys else None
+        hand = bool((cell or {}).get("hyperlink"))
+        self.table.viewport().setCursor(
+            Qt.CursorShape.PointingHandCursor if hand else Qt.CursorShape.ArrowCursor
+        )
         if keys and keys != self._hover_keys:
             self._hover_keys = keys
             self.last_comment_needed.emit(*keys)
@@ -1278,6 +1314,7 @@ class TablePage(QWidget):
             delete.setEnabled(writable)
         add = menu.addAction("Добавить столбец…", self._prompt_add_column)
         add.setEnabled(writable)
+        self._add_clear_highlight_action(menu)
         menu.exec(global_pos)
 
     def _rename_header_column(self, key: str) -> None:
@@ -1314,7 +1351,8 @@ class TablePage(QWidget):
             item.setForeground(QBrush(QColor(PRIMARY)))
         else:
             item.setForeground(QBrush(QColor("#263238")))
-        item.setToolTip(str((cell or {}).get("hyperlink") or ""))
+        url = str((cell or {}).get("hyperlink") or "").strip()
+        item.setToolTip("Нажмите Ctrl+ЛКМ, чтобы открыть ссылку" if url else "")
 
     def _show_cell_link(self, cell: dict | None) -> None:
         url = str((cell or {}).get("hyperlink") or "").strip()
@@ -1395,6 +1433,8 @@ class TablePage(QWidget):
         menu.exec(global_pos)
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
+        if watched is self.table.viewport() and event.type() == QEvent.Type.Leave:
+            self.table.viewport().setCursor(Qt.CursorShape.ArrowCursor)
         if event.type() == QEvent.Type.ContextMenu and self.history_panel.isVisible():
             if watched in {self.history_table, self.history_table.viewport()}:
                 return super().eventFilter(watched, event)
@@ -1437,6 +1477,7 @@ class TablePage(QWidget):
                 menu.addAction("Скрыть историю", lambda: self._set_history_visible(False))
             else:
                 menu.addAction("Показать историю", lambda: self._set_history_visible(True))
+            self._add_clear_highlight_action(menu)
             menu.exec(global_pos)
             return
         param, col_key = keys
@@ -1466,6 +1507,7 @@ class TablePage(QWidget):
         save_act.setEnabled(self._can_save_draft(param, col_key) and not self.busy)
         all_act = menu.addAction("Сохранить все черновики", lambda: self.save_all_drafts_requested.emit())
         all_act.setEnabled(self._has_drafts() and self.can_write)
+        self._add_clear_highlight_action(menu)
         menu.exec(global_pos)
 
     def _show_history_for(self, parameter_key: str, column_key: str) -> None:

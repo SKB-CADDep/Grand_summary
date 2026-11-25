@@ -288,7 +288,7 @@ class NotificationOut(BaseModel):
 
 
 class TriangleSourceCell(BaseModel):
-    sheet_key: Literal["geometry", "flow_path"]
+    sheet_key: str = Field(min_length=1, max_length=32)
     row: int = Field(ge=11)
     column: int = Field(ge=2)
 

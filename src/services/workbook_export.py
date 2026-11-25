@@ -9,6 +9,8 @@ from sqlalchemy.orm import Session
 
 from backend.models import TriangleSheet, Workbook
 from src.services import workbooks as workbook_service
+from src.services.decimals import normalize_decimal_commas
+from src.services.triangle_import import triangle_sheet_sort_key
 from src.services.workbooks import _display
 
 
@@ -35,6 +37,8 @@ def _fill_triangle_sheet(sheet: Worksheet, stored: TriangleSheet) -> None:
     data = json.loads(stored.data_json or "{}")
     for row_index, row in enumerate(data.get("rows") or [], start=1):
         for col_index, value in enumerate(row, start=1):
+            if isinstance(value, str):
+                value = normalize_decimal_commas(value)
             sheet.cell(row_index, col_index, value)
 
 
@@ -58,8 +62,10 @@ def build_workbook_export(session: Session, workbook: Workbook, scope: str) -> b
         triangles = (
             session.query(TriangleSheet)
             .filter(TriangleSheet.workbook_id == root.id)
-            .order_by(TriangleSheet.sheet_key)
             .all()
+        )
+        triangles.sort(
+            key=lambda stored: triangle_sheet_sort_key(json.loads(stored.data_json or "{}"))
         )
         for stored in triangles:
             _fill_triangle_sheet(next_sheet(), stored)

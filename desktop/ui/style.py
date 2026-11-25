@@ -116,6 +116,22 @@ QFrame#triangle-subtabs {
   border: none;
   border-bottom: 1px solid #d9e3f0;
 }
+QFrame#parameter-tree-combo {
+  background: #ffffff;
+  border: 1px solid #d9e3f0;
+  border-radius: 8px;
+}
+QFrame#parameter-tree-combo QLabel {
+  background: transparent;
+  color: #263238;
+  padding: 6px 4px 6px 10px;
+}
+QFrame#parameter-tree-combo:disabled {
+  background: #f3f6fa;
+}
+QFrame#parameter-tree-combo:disabled QLabel {
+  color: #8a9aaa;
+}
 QFrame#triangle-toolbar {
   background: #ffffff;
   border: 1px solid #d9e3f0;
@@ -129,6 +145,12 @@ QTableWidget#triangle-grid-header {
 }
 QTableWidget#triangle-grid-header {
   border-bottom: none;
+}
+QTableWidget#triangle-stage-column {
+  background: #ffffff;
+  border: none;
+  border-right: 1px solid #d9e3f0;
+  border-radius: 0;
 }
 QTableWidget#triangle-grid {
   border-top: none;

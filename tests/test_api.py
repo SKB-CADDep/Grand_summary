@@ -23,6 +23,36 @@ def _triangle_file(path: Path) -> Path:
     return path
 
 
+def test_decimal_commas_in_parameters_become_dots():
+    from src.services.decimals import normalize_decimal_commas
+
+    assert normalize_decimal_commas("0,1") == "0.1"
+    assert normalize_decimal_commas("0,01") == "0.01"
+    assert normalize_decimal_commas("12,345678") == "12.345678"
+    assert normalize_decimal_commas("0.1") == "0.1"
+    assert normalize_decimal_commas("Тз, Д-00123") == "Тз, Д-00123"
+    assert normalize_decimal_commas("e,") == "e,"
+
+
+def test_typed_parameter_comma_is_stored_as_dot(client):
+    objects = client.get("/api/objects").json()
+    workbook_id = client.post("/api/workbooks", json={"object_id": objects[0]["id"]}).json()["id"]
+    sheet_id = client.post(f"/api/workbooks/{workbook_id}/sheets", json={"name": "Лист ИД"}).json()["id"]
+    draft = client.patch(
+        f"/api/workbooks/{sheet_id}/cells/r010/s1",
+        json={"value": "0,01"},
+    )
+    assert draft.status_code == 200, draft.text
+    assert draft.json()["display"] == "0.01"
+    confirm = client.post(
+        f"/api/workbooks/{sheet_id}/cells/r010/s1/confirm",
+        json={"value": "12,5", "comment": "ручной ввод"},
+    )
+    assert confirm.status_code == 200, confirm.text
+    assert confirm.json()["value"] == "12.5"
+    assert confirm.json()["display"] == "12.5"
+
+
 def test_health(client):
     response = client.get("/api/health")
     assert response.status_code == 200
@@ -229,6 +259,34 @@ def test_reader_can_toggle_unification_but_values_stay_locked(client, monkeypatc
     assert unmarked.json()["unified"] is False
 
 
+def test_triangle_file_loads_every_sheet_in_excel_order():
+    from src.services.triangle_import import parse_triangle_sheets
+
+    workbook = Path(__file__).resolve().parents[1] / "Для тестов" / "Т.xlsx"
+    sheets = parse_triangle_sheets(workbook)
+    assert [sheet["name"] for sheet in sheets] == [
+        "Исх. данные",
+        "Геом. данные",
+        "Основн. результаты",
+        "Потери",
+        "Напр.лопатки",
+        "Раб. лопатки",
+        "Осевое усилие",
+        "Проточная часть",
+        "Потери отн",
+    ]
+    assert sheets[1]["key"] == "geometry"
+    assert sheets[7]["key"] == "flow_path"
+    assert [sheet["order"] for sheet in sheets] == list(range(len(sheets)))
+    assert sheets[1]["coordinate_mapping"]
+    assert sheets[2]["coordinate_mapping"] == {}
+    by_name = {sheet["name"]: sheet for sheet in sheets}
+    assert max(len(row) for row in by_name["Исх. данные"]["rows"]) == 28
+    assert max(len(row) for row in by_name["Потери отн"]["rows"]) == 24
+    assert max(len(row) for row in by_name["Геом. данные"]["rows"]) == 37
+    assert max(len(row) for row in by_name["Проточная часть"]["rows"]) == 36
+
+
 def test_import_triangle(client):
     objects = client.get("/api/objects").json()
     workbook_id = client.post("/api/workbooks", json={"object_id": objects[0]["id"]}).json()["id"]
@@ -253,10 +311,15 @@ def test_import_triangle(client):
     )
     assert first_upload.status_code == 200
     first_sheets = first_upload.json()["sheets"]
-    assert [sheet["name"] for sheet in first_sheets] == ["Геом. данные", "Проточная часть"]
+    assert [sheet["name"] for sheet in first_sheets] == [
+        "Геом. данные",
+        "Проточная часть",
+        "Лист для игнорирования",
+    ]
+    assert [sheet["key"] for sheet in first_sheets] == ["geometry", "flow_path", "Лист для игнорирования"]
     assert first_sheets[0]["rows"][0][0] == "Геометрия v1"
     assert first_sheets[1]["rows"][1][1] == "Проточная часть v1"
-    assert len(first_sheets) == 2
+    assert first_sheets[2]["rows"][0][0] == "Не импортировать"
 
     second_upload = client.post(
         f"/api/workbooks/{workbook_id}/import-triangle",
@@ -266,7 +329,11 @@ def test_import_triangle(client):
     assert second_upload.status_code == 200
     stored_sheets = client.get(f"/api/workbooks/{workbook_id}/triangles")
     assert stored_sheets.status_code == 200
-    assert len(stored_sheets.json()) == 2
+    assert [sheet["name"] for sheet in stored_sheets.json()] == [
+        "Геом. данные",
+        "Проточная часть",
+        "Лист для игнорирования",
+    ]
     assert stored_sheets.json()[0]["rows"][0][0] == "Геометрия v2"
     assert stored_sheets.json()[1]["rows"][1][1] == "Проточная часть v2"
     assert client.get(f"/api/workbooks/{workbook_id}/versions").json() == []
@@ -312,8 +379,8 @@ def test_sync_selected_triangle_cells(client):
         files={"file": ("triangle.xlsx", _triangle_sync_file(stage_label), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
     )
     assert imported.status_code == 200
-    assert imported.json()["sheets"][0]["rows"][10][2] == "3,56"
-    assert imported.json()["sheets"][0]["rows"][10][4] == "123,46"
+    assert imported.json()["sheets"][0]["rows"][10][2] == "3.56"
+    assert imported.json()["sheets"][0]["rows"][10][4] == "123.46"
 
     response = client.post(
         f"/api/workbooks/{workbook_id}/sync-triangles",
@@ -325,7 +392,7 @@ def test_sync_selected_triangle_cells(client):
         (cell["parameter_key"], cell["column_key"]): cell
         for cell in client.get(f"/api/workbooks/{workbook_id}").json()["cells"]
     }
-    assert cells[("r010", "s1")]["value"] == "123,46"
+    assert cells[("r010", "s1")]["value"] == "123.46"
     assert cells[("r010", "s1")]["status"] == "triangle"
     assert cells[("r011", "s1")]["value"] == "preserve"
     history = client.get(f"/api/workbooks/{workbook_id}/cells/r010/s1/history").json()
@@ -360,7 +427,7 @@ def test_sync_selected_unmapped_cell_to_chosen_parameter(client):
         for cell in client.get(f"/api/workbooks/{workbook_id}").json()["cells"]
     }
     assert cells[("r016", "s1")]["value"] == "ручное значение"
-    assert cells[("r013", "s1")]["value"] == "1,26"
+    assert cells[("r013", "s1")]["value"] == "1.26"
     assert cells[("r060", "s1")]["value"] == "Тз"
     assert cells[("r061", "s1")]["value"] == "Д-00123"
 
@@ -374,7 +441,7 @@ def test_sync_triangle_installation_angle_uses_degrees_minutes_seconds(client):
         files={"file": ("triangle.xlsx", _triangle_sync_file(stage_label, 12.345678), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
     )
     assert imported.status_code == 200, imported.text
-    assert imported.json()["sheets"][1]["rows"][10][7] == "12,345678"
+    assert imported.json()["sheets"][1]["rows"][10][7] == "12.345678"
 
     response = client.post(
         f"/api/workbooks/{workbook_id}/sync-triangles",
@@ -407,7 +474,7 @@ def test_sync_triangle_partiality_percentage_to_fraction(client):
         (cell["parameter_key"], cell["column_key"]): cell
         for cell in client.get(f"/api/workbooks/{workbook_id}").json()["cells"]
     }
-    assert cells[("r011", "s1")]["value"] == "0,0356"
+    assert cells[("r011", "s1")]["value"] == "0.0356"
 
 
 def test_sync_all_triangle_parameters_replaces_mapped_cells(client):
@@ -433,11 +500,11 @@ def test_sync_all_triangle_parameters_replaces_mapped_cells(client):
         (cell["parameter_key"], cell["column_key"]): cell
         for cell in client.get(f"/api/workbooks/{sheet_id}").json()["cells"]
     }
-    assert cells[("r008", "s1")]["value"] == "0,75"
+    assert cells[("r008", "s1")]["value"] == "0.75"
     assert cells[("r009", "s1")]["value"] == "5000"
     assert cells[("r010", "s1")]["value"] == "old"
-    assert cells[("r011", "s1")]["value"] == "0,0356"
-    assert cells[("r013", "s1")]["value"] == "1,26"
+    assert cells[("r011", "s1")]["value"] == "0.0356"
+    assert cells[("r013", "s1")]["value"] == "1.26"
     assert cells[("r014", "s1")]["value"] == "777"
     assert cells[("r016", "s1")]["value"] == "keep"
 
@@ -490,11 +557,11 @@ def test_sync_all_uses_requested_triangle_coordinates(client):
         for cell in client.get(f"/api/workbooks/{sheet_id}").json()["cells"]
     }
     expected = {
-        "r006": "Профиль СЛ", "r007": "104°00'00\"", "r008": "0,5", "r009": "12500",
-        "r010": "101", "r011": "0,035", "r012": "102", "r013": "100",
+        "r006": "Профиль СЛ", "r007": "104°00'00\"", "r008": "0.5", "r009": "12500",
+        "r010": "101", "r011": "0.035", "r012": "102", "r013": "100",
         "r014": "52", "r015": "103", "r022": "109", "r026": "110",
         "r035": "111", "r036": "112", "r043": "Профиль РЛ", "r047": "106",
-        "r048": "105", "r049": "54", "r050": "107", "r051": "0,6",
+        "r048": "105", "r049": "54", "r050": "107", "r051": "0.6",
         "r052": "23400", "r060": "Тз", "r061": "Д-00123", "r083": "108",
     }
     assert {key: cells[(key, "s1")] for key in expected} == expected
@@ -581,18 +648,19 @@ def test_export_report_table_docx(client):
 
     objects = client.get("/api/objects").json()
     workbook_id = client.post("/api/workbooks", json={"object_id": objects[0]["id"]}).json()["id"]
+    sheet_id = client.post(f"/api/workbooks/{workbook_id}/sheets", json={"name": "Лист ИД"}).json()["id"]
     confirmed = client.post(
-        f"/api/workbooks/{workbook_id}/cells/r010/s1/confirm",
-        json={"value": "150"},
+        f"/api/workbooks/{sheet_id}/cells/r010/s1/confirm",
+        json={"value": "150", "comment": "Выдача"},
     )
     draft = client.patch(
-        f"/api/workbooks/{workbook_id}/cells/r011/s1",
+        f"/api/workbooks/{sheet_id}/cells/r011/s1",
         json={"value": "151"},
     )
     assert confirmed.status_code == 200
     assert draft.status_code == 200
     response = client.post(
-        f"/api/workbooks/{workbook_id}/export-report-table",
+        f"/api/workbooks/{sheet_id}/export-report-table",
         json={
             "selected_parameter_keys": ["r010", "r011"],
             "selected_column_keys": ["s1"],
@@ -607,24 +675,36 @@ def test_export_report_table_docx(client):
     document = Document(BytesIO(response.content))
     section = document.sections[0]
     assert section.page_width > section.page_height
-    data_cells = {
-        row.cells[2].text: row.cells[2]
-        for row in document.tables[0].rows[1:]
-        if row.cells[2].text in {"150", "151"}
-    }
-    confirmed_shading = data_cells["150"]._tc.tcPr.find(qn("w:shd"))
-    assert confirmed_shading is not None
-    assert confirmed_shading.get(qn("w:fill")) == "C8E6C9"
-    assert data_cells["151"]._tc.tcPr.find(qn("w:shd")) is None
+    table = document.tables[0]
+    assert [cell.text for cell in table.rows[0].cells[:4]] == [
+        "Наименование параметра",
+        "Обозначение",
+        "Ед. изм.",
+        "1",
+    ]
+    header_shading = table.rows[0].cells[0]._tc.tcPr.find(qn("w:shd"))
+    assert header_shading is not None
+    assert header_shading.get(qn("w:fill")) == "D9EAF7"
+    by_name = {row.cells[0].text: row for row in table.rows[1:]}
+    section_row = by_name["Сопловая лопатка:"]
+    section_shading = section_row.cells[0]._tc.tcPr.find(qn("w:shd"))
+    assert section_shading is not None
+    assert section_shading.get(qn("w:fill")) == "D9EAF7"
+    height = by_name["Высота сопловой лопатки"]
+    assert height.cells[1].text == "L'"
+    assert height.cells[2].text == "мм"
+    assert height.cells[3].text == "150"
+    assert height.cells[3]._tc.tcPr.find(qn("w:shd")) is None
+    partial = by_name["Парциальность"]
+    assert partial.cells[1].text == "e"
+    assert partial.cells[3].text == "151"
+    assert partial.cells[3]._tc.tcPr.find(qn("w:shd")) is None
     document_text = " ".join(
         [paragraph.text for paragraph in document.paragraphs]
         + [cell.text for table in document.tables for row in table.rows for cell in row.cells]
     )
-    assert "Таблица 7 – Данные по направляющим лопаткам и диафрагмам ступеней ЦСД" in document_text
-    assert "К-200" in document_text
-    assert "ТЭЦ-1" in document_text
-    assert "T-101" in document_text
-    assert "Высота лопаток lc" in document_text
+    assert "Таблица 7 – Данные по направляющим лопаткам и диафрагмам ступеней ЦСД турбины К-200 ТЭЦ-1 (T-101)" in document_text
+    assert "(L')" not in height.cells[0].text
 
 
 def _workbook_id(client) -> str:

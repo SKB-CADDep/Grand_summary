@@ -10,6 +10,7 @@ from sqlalchemy.orm.attributes import set_committed_value
 
 from backend.models import Cell, CellChange, Notification, ObjectItem, TriangleSheet, Version, Workbook
 from src.catalog import column_by_key, columns, parameter_by_key, parameters
+from src.services.decimals import normalize_decimal_commas
 from src.services.journal import add_audit
 from src.services.rules import all_lock_keys, matching_rules, options_for
 
@@ -45,9 +46,10 @@ def _iso(value: datetime | None) -> str | None:
 
 
 def _display(cell: Cell) -> str | None:
-    if cell.status == "draft" and cell.draft_value is not None:
-        return cell.draft_value
-    return cell.value
+    raw = cell.draft_value if cell.status == "draft" and cell.draft_value is not None else cell.value
+    if raw is None:
+        return None
+    return normalize_decimal_commas(raw)
 
 
 def extra_columns(workbook: Workbook) -> list[dict]:
@@ -739,6 +741,8 @@ def set_draft(
     cell = get_or_create_cell(session, workbook, parameter_key, column_key)
     _ensure_editable(workbook, parameter_key, column_key, cell)
     _check_sheet_conflict(workbook, cell, expected_updated_at)
+    if value is not None:
+        value = normalize_decimal_commas(value)
     next_status = _saved_cell_status(session, cell) if (value or "") == (cell.value or "") else "draft"
     updates = {
         "draft_value": None if next_status != "draft" else value,
@@ -822,6 +826,7 @@ def confirm_cell(
     new_value = value if value is not None else cell.draft_value
     if new_value is None:
         raise ValueError("Нет значения для сохранения")
+    new_value = normalize_decimal_commas(new_value)
     old_value = cell.value
     previous_author = cell.updated_by
     _ensure_primary_origin(session, workbook, cell)
