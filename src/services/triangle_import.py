@@ -116,6 +116,14 @@ TRIANGLE_COORDINATE_MAP: dict[str, dict[int, tuple[tuple[str, str], ...]]] = {
 _AREA_CONVERSION = Decimal("10000")
 
 
+def triangle_synced_parameter_keys() -> set[str]:
+    keys = {parameter_key for mapping in TRIANGLE_PARAMETER_MAP.values() for parameter_key in mapping.values()}
+    for columns in TRIANGLE_COORDINATE_MAP.values():
+        for targets in columns.values():
+            keys.update(parameter_key for parameter_key, _transform in targets)
+    return keys
+
+
 def triangle_parameter_mapping(sheet_key: str) -> dict[str, str]:
     return dict(TRIANGLE_PARAMETER_MAP.get(sheet_key, {}))
 
@@ -553,6 +561,7 @@ def sync_triangle_data(
             workbook_service.apply_rules(
                 session, target_workbook, cell.parameter_key, cell.column_key, username
             )
+    workbook_service.compact_sheet(session, target_workbook)
 
     add_audit(
         session,

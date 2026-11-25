@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-FROZEN_COLUMNS = 2
+FROZEN_COLUMNS = 4
 HEADER_BG = QColor("#eef5fb")
 HEADER_LINE = QColor("#d9e3f0")
 HEADER_TEXT = QColor("#263238")
@@ -39,8 +39,10 @@ class StagesHeader(QHeaderView):
         font.setBold(True)
         font.setPointSize(10)
         painter.setFont(font)
-        if logicalIndex < FROZEN_COLUMNS:
-            painter.drawText(rect.adjusted(4, 2, -4, -2), Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap, text)
+        if logicalIndex == 1:
+            painter.drawText(rect.adjusted(8, 2, -8, -2), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, text)
+        elif logicalIndex < FROZEN_COLUMNS:
+            painter.drawText(rect.adjusted(4, 2, -4, -2), Qt.AlignmentFlag.AlignCenter, text)
         else:
             bottom = QRect(rect.left(), rect.top() + rect.height() // 2, rect.width(), rect.height() - rect.height() // 2)
             painter.drawText(bottom, Qt.AlignmentFlag.AlignCenter, text)
@@ -88,7 +90,7 @@ class FrozenSheetTable(QTableWidget):
         self.setCornerButtonEnabled(False)
         self.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
-        self.setWordWrap(True)
+        self.setWordWrap(False)
         self.horizontalHeader().setStretchLastSection(False)
 
         self.frozen = QTableWidget(self)
@@ -105,6 +107,7 @@ class FrozenSheetTable(QTableWidget):
         self.frozen.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
         self.frozen.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.frozen.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.frozen.setWordWrap(False)
         self.frozen.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.frozen.cellClicked.connect(self.frozen_cell_clicked.emit)
         self.frozen.customContextMenuRequested.connect(self._frozen_menu)
@@ -115,7 +118,9 @@ class FrozenSheetTable(QTableWidget):
         self.verticalHeader().sectionResized.connect(self._sync_row_height)
         self.verticalScrollBar().valueChanged.connect(self._scroll_frozen)
         self.frozen.verticalScrollBar().valueChanged.connect(self._scroll_main)
+        self.horizontalScrollBar().valueChanged.connect(self._sync_header_offset)
         self.horizontalHeader().sectionResized.connect(self._update_frozen_geometry)
+        self._lock_header_scrollbars()
 
     def _frozen_menu(self, pos) -> None:
         self.frozen_menu_requested.emit(self.frozen.viewport().mapToGlobal(pos))
@@ -146,9 +151,36 @@ class FrozenSheetTable(QTableWidget):
         self.verticalScrollBar().setValue(value)
         self._syncing_scroll = False
 
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        self._lock_header_scrollbars()
+        self._sync_header_offset(self.horizontalScrollBar().value())
+
+    def scrollContentsBy(self, dx: int, dy: int) -> None:  # noqa: N802
+        super().scrollContentsBy(dx, dy)
+        self._sync_header_offset(self.horizontalScrollBar().value())
+
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
+        self._lock_header_scrollbars()
+        self._sync_header_offset(self.horizontalScrollBar().value())
         self._update_frozen_geometry()
+
+    def _lock_header_scrollbars(self) -> None:
+        for header in (self.horizontalHeader(), self.frozen.horizontalHeader()):
+            header.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            header.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            horizontal = header.horizontalScrollBar()
+            vertical = header.verticalScrollBar()
+            horizontal.setFixedHeight(0)
+            vertical.setFixedWidth(0)
+            horizontal.hide()
+            vertical.hide()
+
+    def _sync_header_offset(self, value: int) -> None:
+        header = self.horizontalHeader()
+        if header.offset() != value:
+            header.setOffset(value)
 
     def _update_frozen_geometry(self) -> None:
         if self.columnCount() < FROZEN_COLUMNS:
@@ -197,6 +229,8 @@ class FrozenSheetTable(QTableWidget):
         for col in range(FROZEN_COLUMNS):
             self.frozen.setColumnWidth(col, self.columnWidth(col))
         self.frozen.horizontalHeader().setFixedHeight(self.horizontalHeader().height())
+        self._lock_header_scrollbars()
+        self._sync_header_offset(self.horizontalScrollBar().value())
         self._update_frozen_geometry()
 
     def paint_frozen_item(self, row: int, column: int, item: QTableWidgetItem | None) -> None:

@@ -28,6 +28,7 @@ from backend.schemas import (
     ReportTableExportRequest,
     SessionRestoreRequest,
     SheetCreateRequest,
+    SheetIssuedRequest,
     SheetRenameRequest,
     TriangleSyncRequest,
     UnsavedCellOut,
@@ -63,6 +64,8 @@ def _require_ordinary_sheet(workbook: Workbook) -> None:
 def _ordinary_workbook_or_400(session: Session, workbook_id: str) -> Workbook:
     workbook = _workbook_or_404(session, workbook_id)
     _require_ordinary_sheet(workbook)
+    if workbook.is_issued:
+        raise HTTPException(status_code=400, detail="Выданная версия доступна только для просмотра")
     return workbook
 
 
@@ -102,12 +105,7 @@ def list_sheets(
 ):
     workbook = _workbook_or_404(session, workbook_id)
     return [
-        {
-            "id": item.id,
-            "name": item.sheet_name,
-            "order": item.sheet_order,
-            "is_primary": item.is_primary,
-        }
+        workbook_service.sheet_brief(item)
         for item in workbook_service.list_sheet_workbooks(session, workbook)
     ]
 
@@ -151,6 +149,7 @@ def project_revision(
             "name": item.sheet_name,
             "order": item.sheet_order,
             "is_primary": item.is_primary,
+            "is_issued": bool(item.is_issued),
             "updated_at": item.updated_at.isoformat() if item.updated_at else None,
             "cells": cell_stats.get(item.id, {}),
             "triangles_updated_at": triangle_updates.get(item.id),
@@ -258,11 +257,32 @@ def set_primary_sheet(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {
-        "sheets": [
-            {"id": item.id, "name": item.sheet_name, "order": item.sheet_order, "is_primary": item.is_primary}
-            for item in sheets
-        ],
+        "sheets": [workbook_service.sheet_brief(item) for item in sheets],
         "active_sheet_id": target.id,
+    }
+
+
+@router.patch("/workbooks/{workbook_id}/sheets/{sheet_id}/issued")
+def set_sheet_issued(
+    workbook_id: str,
+    sheet_id: str,
+    body: SheetIssuedRequest,
+    session: Session = Depends(get_db),
+    username: str = Depends(require_editor),
+):
+    workbook = _workbook_or_404(session, workbook_id)
+    root = workbook.parent or workbook
+    target = session.get(Workbook, sheet_id)
+    if target is None or (target.id != root.id and target.parent_workbook_id != root.id):
+        raise HTTPException(status_code=404, detail="Лист не найден")
+    try:
+        updated = workbook_service.set_sheet_issued(session, target, body.issued, username)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    sheets = workbook_service.list_sheet_workbooks(session, root)
+    return {
+        "sheets": [workbook_service.sheet_brief(item) for item in sheets],
+        "active_sheet_id": updated.id,
     }
 
 
@@ -283,10 +303,7 @@ def unset_primary_sheet(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {
-        "sheets": [
-            {"id": item.id, "name": item.sheet_name, "order": item.sheet_order, "is_primary": item.is_primary}
-            for item in sheets
-        ],
+        "sheets": [workbook_service.sheet_brief(item) for item in sheets],
         "active_sheet_id": target.id,
     }
 
@@ -308,15 +325,7 @@ def delete_sheet(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {
-        "sheets": [
-            {
-                "id": item.id,
-                "name": item.sheet_name,
-                "order": item.sheet_order,
-                "is_primary": item.is_primary,
-            }
-            for item in sheets
-        ],
+        "sheets": [workbook_service.sheet_brief(item) for item in sheets],
         "active_sheet_id": active_id,
     }
 
@@ -394,6 +403,9 @@ async def import_excel_sheets(
         structure_source = root
         created: list[Workbook] = []
         imported_count = 0
+        grids: list[dict] = []
+        parameters_present: list[set[str]] = []
+        columns_present: list[set[str]] = []
         existing_names = {item.sheet_name.casefold() for item in sheets}
         for index, excel_sheet in enumerate(importable_sheets):
             base_name = excel_sheet.title[:255] or f"Лист {index + 1}"
@@ -413,9 +425,18 @@ async def import_excel_sheets(
                     session, structure_source, name, username, include_values=False
                 )
                 target.sheet_name = name
-            imported_count += workbook_import.import_sheet(session, target, excel_sheet, username)
+            count, grid, present_parameters, present_columns = workbook_import.import_sheet(
+                session, target, excel_sheet, username
+            )
+            imported_count += count
+            grids.append(grid)
+            parameters_present.append(present_parameters)
+            columns_present.append(present_columns)
             created.append(target)
             structure_source = target
+        journaled = workbook_import.record_excel_journal(
+            session, created, grids, parameters_present, columns_present, username
+        )
         imported_excel.close()
         session.flush()
         session.commit()
@@ -432,7 +453,20 @@ async def import_excel_sheets(
         ],
         "active_sheet_id": created[0].id,
         "imported": imported_count,
+        "journaled": journaled,
     }
+
+
+@router.post("/workbooks/{workbook_id}/clear-excel-highlight")
+def clear_excel_highlight(
+    workbook_id: str,
+    session: Session = Depends(get_db),
+    _username: str = Depends(require_editor),
+):
+    workbook = _workbook_or_404(session, workbook_id)
+    cleared = workbook_service.clear_excel_highlight(session, workbook)
+    session.commit()
+    return {"cleared": cleared}
 
 
 @router.get("/workbooks/{workbook_id}/catalog", response_model=CatalogResponse)

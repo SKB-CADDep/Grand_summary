@@ -39,6 +39,8 @@ class Workbook(Base):
     sheet_name: Mapped[str] = mapped_column(String(255), nullable=False, default="Исходные данные")
     sheet_order: Mapped[int] = mapped_column(default=0)
     is_primary: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_issued: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    issued_snapshot_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     extra_columns_json: Mapped[str] = mapped_column(Text, default="[]")
     column_overrides_json: Mapped[str] = mapped_column(Text, default="{}")
     deleted_columns_json: Mapped[str] = mapped_column(Text, default="[]")
@@ -84,6 +86,7 @@ class Cell(Base):
     hyperlink: Mapped[str | None] = mapped_column(Text, nullable=True)
     locked: Mapped[bool] = mapped_column(Boolean, default=False)
     unified: Mapped[bool] = mapped_column(Boolean, default=False)
+    excel_highlight: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     updated_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
 

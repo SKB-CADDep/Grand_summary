@@ -66,7 +66,7 @@ def open_window() -> None:
 
     try:
         from desktop.client import ApiClient
-        from desktop.ui.style import APP_QSS
+        from desktop.ui.style import APP_QSS, install_rounded_popups
         from desktop.ui.window import MainWindow
     except ModuleNotFoundError as exc:
         _missing_dependency(exc)
@@ -74,6 +74,7 @@ def open_window() -> None:
     qt_app = QApplication.instance() or QApplication(sys.argv)
     qt_app.setApplicationName(WINDOW_TITLE)
     qt_app.setStyleSheet(APP_QSS)
+    install_rounded_popups(qt_app)
     client = ApiClient()
     window = MainWindow(client)
     window.show()

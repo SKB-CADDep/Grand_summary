@@ -101,6 +101,14 @@ class ApiClient:
     def unset_primary_sheet(self, workbook_id: str, sheet_id: str) -> dict:
         return self._json(self._http.patch(f"/api/workbooks/{workbook_id}/sheets/{sheet_id}/ordinary"))
 
+    def set_sheet_issued(self, workbook_id: str, sheet_id: str, issued: bool) -> dict:
+        return self._json(
+            self._http.patch(
+                f"/api/workbooks/{workbook_id}/sheets/{sheet_id}/issued",
+                json={"issued": issued},
+            )
+        )
+
     def delete_sheet(self, workbook_id: str, sheet_id: str) -> dict:
         return self._json(self._http.delete(f"/api/workbooks/{workbook_id}/sheets/{sheet_id}"))
 
@@ -171,6 +179,9 @@ class ApiClient:
 
     def sync_triangles(self, workbook_id: str, body: dict) -> dict:
         return self._json(self._http.post(f"/api/workbooks/{workbook_id}/sync-triangles", json=body))
+
+    def clear_excel_highlight(self, workbook_id: str) -> dict:
+        return self._json(self._http.post(f"/api/workbooks/{workbook_id}/clear-excel-highlight"))
 
     def import_workbook(self, workbook_id: str, path: Path) -> dict:
         with path.open("rb") as handle:

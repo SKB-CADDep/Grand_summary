@@ -194,7 +194,7 @@ def test_add_cell_comment_keeps_value_and_status(client):
     assert response.json()["status"] == original_status
     history = client.get(f"/api/workbooks/{workbook_id}/cells/r010/s1/history")
     assert history.status_code == 200
-    latest = history.json()[0]
+    latest = history.json()[-1]
     assert latest["old_value"] == original_value
     assert latest["new_value"] == original_value
     assert latest["comment"] == "Комментарий без изменения значения"
@@ -1097,6 +1097,306 @@ def test_import_excel_sheets_and_copy(client):
     )
     assert confirmed.status_code == 200
     assert confirmed.json()["status"] == "confirmed"
+
+
+def test_excel_sheets_become_change_journal_and_orange_can_be_cleared(client):
+    excel = Workbook()
+    first = excel.active
+    first.title = "Основной"
+    first.append(["Наименование параметра", "1", "2"])
+    first.append(["Высота сопловой лопатки, мм", 120, 125])
+    second = excel.create_sheet("15.03.2026")
+    second.append(["Наименование параметра", "1", "2"])
+    second.append(["Высота сопловой лопатки, мм", 130, 125])
+    third = excel.create_sheet("01.04.2026")
+    third.append(["Наименование параметра", "1", "2"])
+    third.append(["Высота сопловой лопатки, мм", 140, None])
+    third.append(["Угол установки профиля в корневом сечении (α'уст)", 15, None])
+    content = BytesIO()
+    excel.save(content)
+    content.seek(0)
+
+    workbook_id = _workbook_id(client)
+    imported = client.post(
+        f"/api/workbooks/{workbook_id}/import-excel",
+        files={"file": ("journal.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert imported.status_code == 200, imported.text
+    result = imported.json()
+    assert result["journaled"] == 4
+    assert [sheet["name"] for sheet in result["sheets"]] == ["Основной", "15.03.2026", "01.04.2026"]
+    primary_id, middle_id, last_id = (sheet["id"] for sheet in result["sheets"])
+
+    primary_cells = {
+        (cell["parameter_key"], cell["column_key"]): cell
+        for cell in client.get(f"/api/workbooks/{primary_id}").json()["cells"]
+    }
+    assert primary_cells[("r010", "s1")]["value"] == "120"
+    assert primary_cells[("r010", "s1")]["excel_highlight"] is False
+    assert client.get(f"/api/workbooks/{primary_id}/cells/r010/s1/history").json() == []
+
+    middle_cells = {
+        (cell["parameter_key"], cell["column_key"]): cell
+        for cell in client.get(f"/api/workbooks/{middle_id}").json()["cells"]
+    }
+    assert middle_cells[("r010", "s1")]["value"] == "130"
+    assert middle_cells[("r010", "s1")]["status"] == "initial"
+    assert middle_cells[("r010", "s1")]["excel_highlight"] is True
+    assert middle_cells[("r010", "s2")]["value"] == "125"
+    assert middle_cells[("r010", "s2")]["excel_highlight"] is False
+    middle_history = client.get(f"/api/workbooks/{middle_id}/cells/r010/s1/history").json()
+    assert [item["comment"] for item in middle_history] == [
+        "Данные из основного листа",
+        "Изменение листа «15.03.2026»",
+    ]
+    assert middle_history[0]["new_value"] == "120"
+    assert middle_history[0]["old_value"] is None
+    assert middle_history[1]["old_value"] == "120"
+    assert middle_history[1]["new_value"] == "130"
+
+    last_cells = {
+        (cell["parameter_key"], cell["column_key"]): cell
+        for cell in client.get(f"/api/workbooks/{last_id}").json()["cells"]
+    }
+    assert last_cells[("r010", "s1")]["value"] == "140"
+    assert last_cells[("r010", "s1")]["excel_highlight"] is True
+    assert last_cells[("r010", "s2")]["value"] in {None, ""}
+    assert last_cells[("r010", "s2")]["excel_highlight"] is True
+    assert last_cells[("r007", "s1")]["value"] == "15"
+    assert last_cells[("r007", "s1")]["excel_highlight"] is True
+    last_history = client.get(f"/api/workbooks/{last_id}/cells/r010/s1/history").json()
+    assert [item["comment"] for item in last_history] == [
+        "Данные из основного листа",
+        "Изменение листа «15.03.2026»",
+        "Изменение листа «01.04.2026»",
+    ]
+    assert [item["new_value"] for item in last_history] == ["120", "130", "140"]
+    angle_history = client.get(f"/api/workbooks/{last_id}/cells/r007/s1/history").json()
+    assert [item["comment"] for item in angle_history] == ["Изменение листа «01.04.2026»"]
+    assert angle_history[0]["old_value"] is None
+    assert angle_history[0]["new_value"] == "15"
+
+    cleared = client.post(f"/api/workbooks/{last_id}/clear-excel-highlight")
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["cleared"] == 4
+    refreshed = {
+        (cell["parameter_key"], cell["column_key"]): cell
+        for cell in client.get(f"/api/workbooks/{last_id}").json()["cells"]
+    }
+    assert refreshed[("r010", "s1")]["value"] == "140"
+    assert refreshed[("r010", "s1")]["excel_highlight"] is False
+    assert refreshed[("r010", "s2")]["excel_highlight"] is False
+    assert refreshed[("r007", "s1")]["excel_highlight"] is False
+    kept = client.get(f"/api/workbooks/{last_id}/cells/r010/s1/history").json()
+    assert [item["comment"] for item in kept] == [item["comment"] for item in last_history]
+    middle_after = {
+        (cell["parameter_key"], cell["column_key"]): cell
+        for cell in client.get(f"/api/workbooks/{middle_id}").json()["cells"]
+    }
+    assert middle_after[("r010", "s1")]["excel_highlight"] is False
+    assert middle_after[("r010", "s1")]["value"] == "130"
+
+
+def test_other_sheet_inherits_unchanged_primary_cells(client):
+    workbook_id = _workbook_id(client)
+    excel = Workbook()
+    sheet = excel.active
+    sheet.title = "Основной"
+    sheet.append(["Наименование параметра", "1", "2"])
+    sheet.append(["Высота сопловой лопатки, мм", 120, 125])
+    content = BytesIO()
+    excel.save(content)
+    content.seek(0)
+    imported = client.post(
+        f"/api/workbooks/{workbook_id}/import-excel",
+        files={"file": ("base.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert imported.status_code == 200, imported.text
+    primary_id = imported.json()["sheets"][0]["id"]
+    journal = client.post(f"/api/workbooks/{primary_id}/sheets", json={"name": "01.04.2026"})
+    assert journal.status_code == 200, journal.text
+    journal_id = journal.json()["id"]
+    inherited = {
+        (cell["parameter_key"], cell["column_key"]): cell
+        for cell in journal.json()["cells"]
+    }
+    assert inherited[("r010", "s1")]["value"] == "120"
+    assert inherited[("r010", "s2")]["value"] == "125"
+
+    changed = client.post(
+        f"/api/workbooks/{journal_id}/cells/r010/s1/confirm",
+        json={"value": "130", "comment": "Изменение журнала", "expected_updated_at": inherited[("r010", "s1")]["updated_at"]},
+    )
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["value"] == "130"
+
+    journal_again = client.get(f"/api/workbooks/{journal_id}").json()
+    journal_cells = {(cell["parameter_key"], cell["column_key"]): cell for cell in journal_again["cells"]}
+    primary_cells = {
+        (cell["parameter_key"], cell["column_key"]): cell
+        for cell in client.get(f"/api/workbooks/{primary_id}").json()["cells"]
+    }
+    assert journal_cells[("r010", "s1")]["value"] == "130"
+    assert journal_cells[("r010", "s2")]["value"] == "125"
+    assert primary_cells[("r010", "s1")]["value"] == "120"
+    assert journal_cells[("r010", "s2")]["updated_at"] == primary_cells[("r010", "s2")]["updated_at"]
+
+
+def test_cell_history_starts_from_primary_sheet_value(client):
+    workbook_id = _workbook_id(client)
+    excel = Workbook()
+    sheet = excel.active
+    sheet.title = "Основной"
+    sheet.append(["Наименование параметра", "1"])
+    sheet.append(["Высота сопловой лопатки, мм", 120])
+    content = BytesIO()
+    excel.save(content)
+    content.seek(0)
+    imported = client.post(
+        f"/api/workbooks/{workbook_id}/import-excel",
+        files={"file": ("base.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert imported.status_code == 200, imported.text
+    primary_id = imported.json()["sheets"][0]["id"]
+    journal = client.post(f"/api/workbooks/{primary_id}/sheets", json={"name": "01.04.2026"})
+    journal_id = journal.json()["id"]
+    inherited = {(cell["parameter_key"], cell["column_key"]): cell for cell in journal.json()["cells"]}
+
+    first = client.post(
+        f"/api/workbooks/{journal_id}/cells/r010/s1/confirm",
+        json={"value": "130", "comment": "Первая правка", "expected_updated_at": inherited[("r010", "s1")]["updated_at"]},
+    )
+    assert first.status_code == 200, first.text
+    history = client.get(f"/api/workbooks/{journal_id}/cells/r010/s1/history").json()
+    assert [item["comment"] for item in history] == ["Данные из основного листа", "Первая правка"]
+    assert history[0]["new_value"] == "120"
+    assert history[0]["old_value"] is None
+    assert history[-1]["old_value"] == "120"
+    assert history[-1]["new_value"] == "130"
+
+    second = client.post(
+        f"/api/workbooks/{journal_id}/cells/r010/s1/confirm",
+        json={"value": "140", "comment": "Вторая правка", "expected_updated_at": first.json()["updated_at"]},
+    )
+    assert second.status_code == 200, second.text
+    history = client.get(f"/api/workbooks/{journal_id}/cells/r010/s1/history").json()
+    assert [item["comment"] for item in history] == [
+        "Данные из основного листа",
+        "Первая правка",
+        "Вторая правка",
+    ]
+    assert history[0]["new_value"] == "120"
+
+    empty = client.post(
+        f"/api/workbooks/{journal_id}/cells/r007/s1/confirm",
+        json={"value": "15", "comment": "Пустая исходная"},
+    )
+    assert empty.status_code == 200, empty.text
+    empty_history = client.get(f"/api/workbooks/{journal_id}/cells/r007/s1/history").json()
+    assert [item["comment"] for item in empty_history] == ["Пустая исходная"]
+
+    copied = client.post(f"/api/workbooks/{journal_id}/sheets", json={"name": "14.04.2026"})
+    assert copied.status_code == 200, copied.text
+    copied_id = copied.json()["id"]
+    copied_cells = {(cell["parameter_key"], cell["column_key"]): cell for cell in copied.json()["cells"]}
+    carried = client.get(f"/api/workbooks/{copied_id}/cells/r010/s1/history").json()
+    assert [item["comment"] for item in carried] == [
+        "Данные из основного листа",
+        "Первая правка",
+        "Вторая правка",
+    ]
+    continued = client.post(
+        f"/api/workbooks/{copied_id}/cells/r010/s1/confirm",
+        json={
+            "value": "150",
+            "comment": "Правка копии",
+            "expected_updated_at": copied_cells[("r010", "s1")]["updated_at"],
+        },
+    )
+    assert continued.status_code == 200, continued.text
+    carried = client.get(f"/api/workbooks/{copied_id}/cells/r010/s1/history").json()
+    assert [item["comment"] for item in carried] == [
+        "Данные из основного листа",
+        "Первая правка",
+        "Вторая правка",
+        "Правка копии",
+    ]
+    assert carried[0]["new_value"] == "120"
+    assert carried[-1]["old_value"] == "140"
+    assert carried[-1]["new_value"] == "150"
+
+
+def test_issued_sheet_is_frozen_and_its_copy_hides_old_changes(client):
+    workbook_id = _workbook_id(client)
+    excel = Workbook()
+    sheet = excel.active
+    sheet.title = "Основной"
+    sheet.append(["Наименование параметра", "1", "2"])
+    sheet.append(["Высота сопловой лопатки, мм", 120, 125])
+    content = BytesIO()
+    excel.save(content)
+    content.seek(0)
+    imported = client.post(
+        f"/api/workbooks/{workbook_id}/import-excel",
+        files={"file": ("base.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert imported.status_code == 200, imported.text
+    primary_id = imported.json()["sheets"][0]["id"]
+    journal = client.post(f"/api/workbooks/{primary_id}/sheets", json={"name": "01.04.2026"})
+    assert journal.status_code == 200, journal.text
+    journal_id = journal.json()["id"]
+    inherited = {(cell["parameter_key"], cell["column_key"]): cell for cell in journal.json()["cells"]}
+    changed = client.post(
+        f"/api/workbooks/{journal_id}/cells/r010/s1/confirm",
+        json={"value": "130", "comment": "Перед выдачей", "expected_updated_at": inherited[("r010", "s1")]["updated_at"]},
+    )
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["status"] == "confirmed"
+
+    blocked_primary = client.patch(
+        f"/api/workbooks/{primary_id}/sheets/{primary_id}/issued",
+        json={"issued": True},
+    )
+    assert blocked_primary.status_code == 400
+
+    issued = client.patch(
+        f"/api/workbooks/{primary_id}/sheets/{journal_id}/issued",
+        json={"issued": True},
+    )
+    assert issued.status_code == 200, issued.text
+    assert next(item["is_issued"] for item in issued.json()["sheets"] if item["id"] == journal_id)
+    frozen = {(cell["parameter_key"], cell["column_key"]): cell for cell in client.get(f"/api/workbooks/{journal_id}").json()["cells"]}
+    assert frozen[("r010", "s1")]["value"] == "130"
+    assert frozen[("r010", "s2")]["value"] == "125"
+    denied = client.post(
+        f"/api/workbooks/{journal_id}/cells/r010/s1/confirm",
+        json={"value": "131", "comment": "После выдачи"},
+    )
+    assert denied.status_code == 400
+
+    copied = client.post(f"/api/workbooks/{journal_id}/sheets", json={"name": "14.04.2026"})
+    assert copied.status_code == 200, copied.text
+    assert copied.json()["is_issued"] is False
+    copied_cells = {(cell["parameter_key"], cell["column_key"]): cell for cell in copied.json()["cells"]}
+    assert copied_cells[("r010", "s1")]["value"] == "130"
+    assert copied_cells[("r010", "s1")]["status"] == "initial"
+    assert copied_cells[("r010", "s2")]["value"] == "125"
+    fresh = client.post(
+        f"/api/workbooks/{copied.json()['id']}/cells/r010/s1/confirm",
+        json={"value": "140", "comment": "Новое изменение", "expected_updated_at": copied_cells[("r010", "s1")]["updated_at"]},
+    )
+    assert fresh.status_code == 200, fresh.text
+    assert fresh.json()["status"] == "confirmed"
+    assert fresh.json()["value"] == "140"
+    still_frozen = {(cell["parameter_key"], cell["column_key"]): cell for cell in client.get(f"/api/workbooks/{journal_id}").json()["cells"]}
+    assert still_frozen[("r010", "s1")]["value"] == "130"
+
+    cleared = client.patch(
+        f"/api/workbooks/{primary_id}/sheets/{journal_id}/issued",
+        json={"issued": False},
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert client.get(f"/api/workbooks/{journal_id}").json()["is_issued"] is False
 
 
 def test_import_excel_rejects_xls(client):

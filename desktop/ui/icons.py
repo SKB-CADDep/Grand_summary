@@ -29,6 +29,20 @@ def eye_icon() -> QIcon:
     return QIcon(pix)
 
 
+def flag_icon() -> QIcon:
+    pix, painter = _pix(16)
+    painter.setPen(QPen(QColor("#1f5e93"), 1.4))
+    painter.drawLine(QPointF(4, 2), QPointF(4, 14))
+    path = QPainterPath()
+    path.moveTo(4, 2.5)
+    path.lineTo(13, 5.5)
+    path.lineTo(4, 8.5)
+    path.closeSubpath()
+    painter.fillPath(path, QColor("#1f5e93"))
+    painter.end()
+    return QIcon(pix)
+
+
 def pencil_icon() -> QIcon:
     pix, painter = _pix(20)
     painter.drawLine(4, 14, 16, 4)

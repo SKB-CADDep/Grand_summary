@@ -1,3 +1,9 @@
+from pathlib import Path
+
+from PyQt6.QtCore import QEvent, QObject, Qt
+from PyQt6.QtGui import QBitmap, QColor, QPainter, QPalette, QRegion
+from PyQt6.QtWidgets import QApplication, QWidget
+
 APP_QSS = """
 QMainWindow, QDialog, QWidget {
   background: #f7f9fd;
@@ -96,10 +102,14 @@ QFrame#sheet-tabs {
   border: none;
   border-bottom: 1px solid #d9e3f0;
 }
+QTableWidget#id-sheet {
+  border-radius: 0;
+}
 QTableWidget#id-sheet-frozen {
   background: #f7f9fd;
   border: none;
   border-right: 1px solid #d9e3f0;
+  border-radius: 0;
 }
 QFrame#triangle-subtabs {
   background: transparent;
@@ -207,7 +217,44 @@ QLineEdit, QPlainTextEdit, QTextEdit, QComboBox, QSpinBox {
 QLineEdit:focus, QPlainTextEdit:focus, QComboBox:focus {
   border-color: #b9cde8;
 }
-QComboBox::drop-down { border: none; width: 18px; }
+QComboBox::drop-down {
+  subcontrol-origin: padding;
+  subcontrol-position: center right;
+  width: 22px;
+  border: none;
+  background: transparent;
+}
+QComboBox::down-arrow, QComboBox::down-arrow:on {
+  image: url(__CHEVRON__);
+  width: 12px;
+  height: 8px;
+}
+QComboBox QLineEdit {
+  border: none;
+  background: #ffffff;
+  color: #263238;
+  padding: 0 4px;
+  min-height: 0;
+  selection-background-color: #dbeafe;
+  selection-color: #263238;
+}
+QComboBox QAbstractItemView {
+  background: #ffffff;
+  color: #263238;
+  border: 1px solid #d9e3f0;
+  border-radius: 8px;
+  padding: 4px;
+  outline: none;
+}
+QComboBox QAbstractItemView::item {
+  border-radius: 6px;
+  padding: 4px 8px;
+  min-height: 22px;
+}
+QComboBox QAbstractItemView::item:selected {
+  background: #dbeafe;
+  color: #263238;
+}
 
 QTableWidget, QTableView {
   background: #ffffff;
@@ -294,10 +341,15 @@ QMenu::item:selected { background: #dbeafe; }
 QMenu::separator { height: 1px; background: #d9e3f0; margin: 4px 8px; }
 QMenu::item:disabled { color: #8a9aaa; }
 
-QScrollBar:vertical { background: #f4f7fb; width: 10px; }
+QScrollBar:vertical { background: #f4f7fb; width: 10px; margin: 0; border: none; }
 QScrollBar::handle:vertical { background: #c9d9ea; border-radius: 4px; min-height: 24px; }
-QScrollBar:horizontal { background: #f4f7fb; height: 10px; }
+QScrollBar:horizontal { background: #f4f7fb; height: 10px; margin: 0; border: none; }
 QScrollBar::handle:horizontal { background: #c9d9ea; border-radius: 4px; min-width: 24px; }
+QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; border: none; background: none; }
+QScrollBar::add-page, QScrollBar::sub-page { background: none; }
+QHeaderView { border: none; }
+QHeaderView QScrollBar:horizontal { height: 0; max-height: 0; border: none; background: transparent; }
+QHeaderView QScrollBar:vertical { width: 0; max-width: 0; border: none; background: transparent; }
 
 QLabel[role="hint"] { color: #666; font-size: 12px; }
 QLabel[role="ok"] {
@@ -348,13 +400,14 @@ QToolTip {
   padding: 7px 10px;
   font-size: 12px;
 }
-"""
+""".replace("__CHEVRON__", (Path(__file__).resolve().parent / "chevron-down.png").as_posix())
 
 PRIMARY = "#1f5e93"
 BG = "#f7f9fd"
 SURFACE = "#ffffff"
 DRAFT = "#fff59d"
 CONFIRMED = "#c8e6c9"
+IMPORTED = "#ffcc80"
 COMPUTED = "#e0e0e0"
 TRIANGLE = "#bbdefb"
 HIGHLIGHT = "#f0f6fc"
@@ -363,3 +416,65 @@ UNIFIED = "#e0e0e0"
 PARAM_BG = "#f7f9fd"
 SECTION_BG = "#e8f1fb"
 HEADER_BG = "#eef5fb"
+
+
+class _RoundedPopupFilter(QObject):
+    def eventFilter(self, watched, event):  # noqa: N802
+        if event.type() not in (QEvent.Type.Show, QEvent.Type.Resize):
+            return False
+        if not isinstance(watched, QWidget) or not watched.isWindow():
+            return False
+        name = watched.metaObject().className()
+        is_combo = name == "QComboBoxPrivateContainer"
+        is_completer = name == "QListView" and bool(watched.windowFlags() & Qt.WindowType.Popup)
+        if not is_combo and not is_completer:
+            return False
+        if event.type() == QEvent.Type.Show and not watched.property("_rounded_popup"):
+            watched.setProperty("_rounded_popup", True)
+            if is_completer:
+                _paint_popup_white(watched)
+        _round_popup(watched)
+        return False
+
+
+def _paint_popup_white(popup: QWidget) -> None:
+    white = QColor("#ffffff")
+    ink = QColor("#263238")
+    palette = popup.palette()
+    palette.setColor(QPalette.ColorRole.Base, white)
+    palette.setColor(QPalette.ColorRole.Window, white)
+    palette.setColor(QPalette.ColorRole.Text, ink)
+    popup.setPalette(palette)
+    popup.setAutoFillBackground(True)
+    viewport = getattr(popup, "viewport", None)
+    if callable(viewport):
+        view = viewport()
+        view.setPalette(palette)
+        view.setAutoFillBackground(True)
+    popup.setStyleSheet(
+        "QListView { background: #ffffff; color: #263238; border: 1px solid #d9e3f0;"
+        " border-radius: 8px; outline: none; padding: 4px; }"
+        "QListView::item { background: #ffffff; color: #263238; border-radius: 6px; padding: 4px 8px; }"
+        "QListView::item:selected { background: #dbeafe; color: #263238; }"
+    )
+
+
+def _round_popup(widget: QWidget, radius: int = 8) -> None:
+    if widget.width() < 8 or widget.height() < 8:
+        return
+    bitmap = QBitmap(widget.size())
+    bitmap.fill(Qt.GlobalColor.color0)
+    painter = QPainter(bitmap)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(Qt.GlobalColor.color1)
+    painter.drawRoundedRect(0, 0, widget.width(), widget.height(), radius, radius)
+    painter.end()
+    widget.setMask(QRegion(bitmap))
+
+
+def install_rounded_popups(app: QApplication) -> None:
+    if getattr(app, "_rounded_popups", None) is not None:
+        return
+    filt = _RoundedPopupFilter(app)
+    app._rounded_popups = filt
+    app.installEventFilter(filt)

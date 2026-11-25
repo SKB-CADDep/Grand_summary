@@ -66,6 +66,7 @@ class CellOut(BaseModel):
     display: str | None = None
     locked: bool = False
     unified: bool = False
+    excel_highlight: bool = False
     updated_at: str | None = None
     updated_by: str | None = None
     options: list[str] = []
@@ -138,6 +139,7 @@ class CellSnap(BaseModel):
     status: str = "empty"
     hyperlink: str | None = None
     locked: bool = False
+    excel_highlight: bool = False
 
 
 class ChangeSnap(BaseModel):
@@ -185,6 +187,7 @@ class WorkbookOut(BaseModel):
     sheet_name: str = "Исходные данные"
     sheet_order: int = 0
     is_primary: bool = False
+    is_issued: bool = False
     cells: list[CellOut]
     unsaved_count: int = 0
 
@@ -195,6 +198,10 @@ class SheetCreateRequest(BaseModel):
 
 class SheetRenameRequest(BaseModel):
     name: str = Field(min_length=1, max_length=255)
+
+
+class SheetIssuedRequest(BaseModel):
+    issued: bool
 
 
 class AddStageRequest(BaseModel):

@@ -21,7 +21,7 @@ def _fill_id_sheet(sheet: Worksheet, workbook: Workbook, title: str) -> None:
     sheet.cell(1, 3, "")
     for index, column in enumerate(columns, start=4):
         sheet.cell(1, index, column.get("label") or column["key"])
-    cells = {(cell.parameter_key, cell.column_key): cell for cell in workbook.cells}
+    cells = {(cell.parameter_key, cell.column_key): cell for cell in workbook_service.effective_cells(workbook)}
     for row_index, parameter in enumerate(parameters, start=2):
         sheet.cell(row_index, 1, parameter.get("label") or parameter["key"])
         sheet.cell(row_index, 2, parameter.get("unit") or "")

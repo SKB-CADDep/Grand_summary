@@ -167,6 +167,7 @@ class MainWindow(QMainWindow):
         self.triangle_page.sync_requested.connect(self._sync_triangles)
         self.table_page.save_project_requested.connect(self._save_project)
         self.table_page.import_workbook_requested.connect(self._import_workbook)
+        self.table_page.clear_excel_highlight_requested.connect(self._clear_excel_highlight)
         self.table_page.export_current_requested.connect(lambda: self._export_excel("current"))
         self.table_page.export_all_requested.connect(lambda: self._export_excel("all"))
         self.table_page.compose_report_requested.connect(self._compose_report)
@@ -176,6 +177,7 @@ class MainWindow(QMainWindow):
         self.table_page.sheet_primary_requested.connect(self.set_primary_sheet)
         self.table_page.sheet_ordinary_requested.connect(self.unset_primary_sheet)
         self.table_page.sheet_delete_requested.connect(self.delete_sheet)
+        self.table_page.sheet_issued_requested.connect(self.set_sheet_issued)
         self.table_page.draft_requested.connect(self._draft)
         self.table_page.confirm_requested.connect(self._confirm)
         self.table_page.discard_requested.connect(self._discard)
@@ -397,6 +399,24 @@ class MainWindow(QMainWindow):
         finally:
             self._set_busy(False)
 
+    def set_sheet_issued(self, sheet_id: str) -> None:
+        source = next((item for item in self.sheets if item.get("id") == sheet_id), None)
+        issued = not bool((source or {}).get("is_issued"))
+        self._set_busy(True)
+        try:
+            result = self.client.set_sheet_issued(self._root_id() or sheet_id, sheet_id, issued)
+            self.sheets = result.get("sheets") or self.sheets
+            self._load_sheet_tree(self._root_id() or sheet_id, result.get("active_sheet_id") or sheet_id)
+            name = (source or {}).get("name") or ""
+            if issued:
+                self._info(f"Лист «{name}» отмечен как выданная версия.")
+            else:
+                self._info(f"С листа «{name}» снята отметка выданной версии.")
+        except Exception as exc:
+            self._fail(exc)
+        finally:
+            self._set_busy(False)
+
     def delete_sheet(self, sheet_id: str) -> None:
         target = next((item for item in self.sheets if item.get("id") == sheet_id), None)
         if QMessageBox.question(self, "Удалить лист", f"Удалить лист «{(target or {}).get('name')}»?") != QMessageBox.StandardButton.Yes:
@@ -446,7 +466,30 @@ class MainWindow(QMainWindow):
             self.tab = "table"
             self._load_sheet_tree(root_id, active)
             imported = result.get("imported") or 0
-            self._info(f"Импортировано значений: {imported}")
+            journaled = result.get("journaled") or 0
+            if journaled:
+                self._info(
+                    f"Импортировано значений: {imported}. Изменения между листами записаны в журнал и подсвечены оранжевым."
+                )
+            else:
+                self._info(f"Импортировано значений: {imported}")
+        except Exception as exc:
+            self._fail(exc)
+        finally:
+            self._set_busy(False)
+
+    def _clear_excel_highlight(self) -> None:
+        if not self.workbook or not self.can_write:
+            return
+        self._set_busy(True)
+        try:
+            result = self.client.clear_excel_highlight(self._root_id() or self.workbook["id"])
+            self._reload_current()
+            cleared = result.get("cleared") or 0
+            if cleared:
+                self._info("Оранжевая подсветка истории снята. Записи журнала сохранены.")
+            else:
+                self._info("Оранжевой подсветки нет.")
         except Exception as exc:
             self._fail(exc)
         finally:

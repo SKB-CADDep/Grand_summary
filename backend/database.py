@@ -85,8 +85,11 @@ def _migrate_sqlite() -> None:
         "ALTER TABLE workbooks ADD COLUMN sheet_name VARCHAR(255) DEFAULT 'Исходные данные'",
         "ALTER TABLE workbooks ADD COLUMN sheet_order INTEGER DEFAULT 0",
         "ALTER TABLE workbooks ADD COLUMN is_primary BOOLEAN DEFAULT 0",
+        "ALTER TABLE workbooks ADD COLUMN is_issued BOOLEAN DEFAULT 0",
+        "ALTER TABLE workbooks ADD COLUMN issued_snapshot_json TEXT DEFAULT '[]'",
         "ALTER TABLE cells ADD COLUMN locked BOOLEAN DEFAULT 0",
         "ALTER TABLE cells ADD COLUMN unified BOOLEAN DEFAULT 0",
+        "ALTER TABLE cells ADD COLUMN excel_highlight BOOLEAN DEFAULT 0",
         "ALTER TABLE cells ADD COLUMN updated_at DATETIME",
         "ALTER TABLE cells ADD COLUMN updated_by VARCHAR(128)",
     ]

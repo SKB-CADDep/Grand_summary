@@ -14,7 +14,14 @@ from sqlalchemy.orm import Session
 
 from backend.models import Version, Workbook
 from src.services import workbooks as workbook_service
-from src.services.workbooks import hyperlinks_map, snapshot_cells, workbook_columns, workbook_parameters, _display
+from src.services.workbooks import (
+    _display,
+    effective_cells,
+    hyperlinks_map,
+    snapshot_cells,
+    workbook_columns,
+    workbook_parameters,
+)
 
 CONFIRMED_FILL = "C8E6C9"
 YELLOW = "FFFF99"
@@ -342,7 +349,7 @@ def build_id_table_docx(
     columns = [item for item in workbook_columns(workbook) if item["key"] in set(selected_column_keys)]
     if not columns:
         raise ValueError("Нет выбранных столбцов")
-    cells = {(cell.parameter_key, cell.column_key): cell for cell in workbook.cells}
+    cells = {(cell.parameter_key, cell.column_key): cell for cell in effective_cells(workbook)}
     obj = workbook.object
     cylinder = obj.cylinder or "ЦСД"
     group_key = parameters[0].get("group") or ""

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from html import escape
 
 from PyQt6.QtCore import QEvent, QTimer, QUrl, Qt, pyqtSignal
@@ -28,14 +29,49 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from desktop.ui.icons import eye_icon, pencil_icon
-from desktop.ui.sheet_table import FrozenSheetTable
-from desktop.ui.style import COMPUTED, CONFIRMED, DRAFT, HIGHLIGHT, PARAM_BG, PRIMARY, SECTION_BG, TRIANGLE, UNIFIED
+from desktop.ui.icons import eye_icon, flag_icon, pencil_icon
+from desktop.ui.sheet_table import FROZEN_COLUMNS, FrozenSheetTable
+from desktop.ui.style import COMPUTED, CONFIRMED, DRAFT, HIGHLIGHT, IMPORTED, PARAM_BG, PRIMARY, SECTION_BG, TRIANGLE, UNIFIED
 
 PARAM_ROLE = Qt.ItemDataRole.UserRole
 COLUMN_ROLE = Qt.ItemDataRole.UserRole + 1
 OPTIONS_ROLE = Qt.ItemDataRole.UserRole + 2
 KIND_ROLE = Qt.ItemDataRole.UserRole + 3
+DATA_COLUMN = FROZEN_COLUMNS
+_PAREN_GROUPS = re.compile(r"\(([^()]*)\)")
+_SYNCED_PARAMETER_KEYS: set[str] | None = None
+
+
+def parameter_designation(param: dict) -> str:
+    if (param.get("key") or "") not in _synced_parameter_keys():
+        return ""
+    groups = _PAREN_GROUPS.findall(param.get("label") or "")
+    if not groups:
+        return ""
+    return groups[-1].strip().rstrip(",").strip()
+
+
+def parameter_display_label(param: dict) -> str:
+    label = param.get("label") or ""
+    unit = param.get("unit") or ""
+    if unit and label.endswith(f", {unit}"):
+        label = label[: -len(unit) - 2].strip()
+    if parameter_designation(param):
+        match = None
+        for match in _PAREN_GROUPS.finditer(label):
+            pass
+        if match is not None:
+            label = f"{label[: match.start()]}{label[match.end() :]}"
+    return " ".join(label.replace(" ,", " ").split()).strip(" ,")
+
+
+def _synced_parameter_keys() -> set[str]:
+    global _SYNCED_PARAMETER_KEYS
+    if _SYNCED_PARAMETER_KEYS is None:
+        from src.services.triangle_import import triangle_synced_parameter_keys
+
+        _SYNCED_PARAMETER_KEYS = triangle_synced_parameter_keys()
+    return _SYNCED_PARAMETER_KEYS
 
 
 def _is_table_caption(label: str) -> bool:
@@ -46,7 +82,7 @@ def _is_table_caption(label: str) -> bool:
     return bool(rest[:1].isdigit())
 
 
-def _status_color(cell: dict | None, row_kind: str) -> QColor | None:
+def _status_color(cell: dict | None, row_kind: str, show_changes: bool = True) -> QColor | None:
     if row_kind != "editable":
         return QColor(COMPUTED)
     if not cell:
@@ -56,12 +92,16 @@ def _status_color(cell: dict | None, row_kind: str) -> QColor | None:
     if cell.get("unified"):
         return QColor(UNIFIED)
     status = cell.get("status") or "empty"
+    if not show_changes:
+        return None
     if status == "draft":
         return QColor(DRAFT)
     if status == "confirmed":
         return QColor(CONFIRMED)
     if status == "triangle":
         return QColor(TRIANGLE)
+    if cell.get("excel_highlight"):
+        return QColor(IMPORTED)
     if status == "computed":
         return QColor(COMPUTED)
     return None
@@ -165,6 +205,9 @@ class SheetTabBar(QFrame):
             if sheet.get("is_primary"):
                 label = f"{label} · основной"
             button = QPushButton(label)
+            if sheet.get("is_issued"):
+                button.setIcon(flag_icon())
+                button.setToolTip("Версия выдана")
             button.setProperty("sheetTab", True)
             button.setCheckable(True)
             button.setAutoExclusive(True)
@@ -187,6 +230,7 @@ class SheetTabBar(QFrame):
 class TablePage(QWidget):
     save_project_requested = pyqtSignal()
     import_workbook_requested = pyqtSignal()
+    clear_excel_highlight_requested = pyqtSignal()
     export_current_requested = pyqtSignal()
     export_all_requested = pyqtSignal()
     compose_report_requested = pyqtSignal()
@@ -196,6 +240,7 @@ class TablePage(QWidget):
     sheet_primary_requested = pyqtSignal(str)
     sheet_ordinary_requested = pyqtSignal(str)
     sheet_delete_requested = pyqtSignal(str)
+    sheet_issued_requested = pyqtSignal(str)
     draft_requested = pyqtSignal(str, str, str, object)
     confirm_requested = pyqtSignal(str, str, str, str, object)
     discard_requested = pyqtSignal(str, str)
@@ -244,15 +289,25 @@ class TablePage(QWidget):
         header.addWidget(self.title, 1)
         self.save_btn = QPushButton("Сохранить проект")
         self.import_btn = QPushButton("Импортировать .xlsx")
+        self.clear_highlight_btn = QPushButton("Снять оранжевую подсветку")
+        self.clear_highlight_btn.setToolTip("Убрать оранжевую подсветку истории, собранной из листов Excel")
         self.export_sheet_btn = QPushButton("Выгрузить лист")
         self.export_all_btn = QPushButton("Выгрузить всё")
         self.report_btn = QPushButton("Составить отчет")
         self.save_btn.clicked.connect(self.save_project_requested.emit)
         self.import_btn.clicked.connect(self.import_workbook_requested.emit)
+        self.clear_highlight_btn.clicked.connect(self.clear_excel_highlight_requested.emit)
         self.export_sheet_btn.clicked.connect(self.export_current_requested.emit)
         self.export_all_btn.clicked.connect(self.export_all_requested.emit)
         self.report_btn.clicked.connect(self.compose_report_requested.emit)
-        for button in (self.save_btn, self.import_btn, self.export_sheet_btn, self.export_all_btn, self.report_btn):
+        for button in (
+            self.save_btn,
+            self.import_btn,
+            self.clear_highlight_btn,
+            self.export_sheet_btn,
+            self.export_all_btn,
+            self.report_btn,
+        ):
             header.addWidget(button)
         root.addLayout(header)
 
@@ -505,14 +560,18 @@ class TablePage(QWidget):
         self.empty.setProperty("role", "hint")
         root.addWidget(self.empty)
 
+    def _view_only(self) -> bool:
+        book = self.workbook or {}
+        return bool(book.get("is_primary") or book.get("is_issued"))
+
     def set_mode(self, mode: str) -> None:
-        if self.workbook and self.workbook.get("is_primary"):
+        if self._view_only():
             mode = "view"
         self.table_mode = mode
-        primary = bool((self.workbook or {}).get("is_primary"))
-        self.edit_btn.setVisible(not primary)
-        self.view_btn.setChecked(mode == "view" or primary)
-        self.edit_btn.setChecked(mode == "edit" and not primary)
+        locked = self._view_only()
+        self.edit_btn.setVisible(not locked)
+        self.view_btn.setChecked(mode == "view" or locked)
+        self.edit_btn.setChecked(mode == "edit" and not locked)
         self.view_btn.setProperty("active", mode == "view")
         self.edit_btn.setProperty("active", mode == "edit")
         self.view_btn.style().unpolish(self.view_btn)
@@ -553,15 +612,16 @@ class TablePage(QWidget):
         writable = can_write and not busy and has_book
         self.save_btn.setEnabled(writable)
         self.import_btn.setEnabled(writable)
+        self.clear_highlight_btn.setEnabled(writable and self._has_excel_highlight())
         self.export_sheet_btn.setEnabled(has_book and not busy)
         self.export_all_btn.setEnabled(has_book and not busy)
         self.report_btn.setEnabled(has_book and not busy)
-        if workbook and workbook.get("is_primary"):
+        if workbook and (workbook.get("is_primary") or workbook.get("is_issued")):
             self.set_mode("view")
-        primary = bool((workbook or {}).get("is_primary"))
-        self.edit_btn.setVisible(not primary)
-        self.edit_btn.setEnabled(can_write and not primary)
-        self.structure_btn.setVisible(writable and not primary)
+        locked = self._view_only()
+        self.edit_btn.setVisible(not locked)
+        self.edit_btn.setEnabled(can_write and not locked)
+        self.structure_btn.setVisible(writable and not locked)
         if self.structure_edit and self.table_mode == "edit":
             self.structure_panel.show()
         else:
@@ -598,6 +658,7 @@ class TablePage(QWidget):
             self.table.setToolTip("")
 
     def set_history(self, items: list[dict]) -> None:
+        items = sorted(items, key=lambda item: item.get("created_at") or "")
         self.history_items = items
         self.history_table.setRowCount(len(items) or 1)
         if not items:
@@ -620,11 +681,21 @@ class TablePage(QWidget):
     def current_cell(self) -> tuple[str, str] | None:
         return self._selected
 
+    def _has_excel_highlight(self) -> bool:
+        return any(cell.get("excel_highlight") for cell in self._cells.values())
+
     def _refresh_hints(self) -> None:
         if (self.workbook or {}).get("is_primary"):
             self.mode_hint.setText("Основной лист доступен только для просмотра.")
+        elif (self.workbook or {}).get("is_issued"):
+            self.mode_hint.setText("Версия выдана. Лист доступен только для просмотра.")
         elif self.table_mode == "edit":
-            self.mode_hint.setText("Жёлтый — черновик, зелёный — сохранено, серый — группа или заблокировано правилом.")
+            if self._has_excel_highlight():
+                self.mode_hint.setText("Оранжевый — история из Excel, жёлтый — черновик, зелёный — сохранено.")
+            else:
+                self.mode_hint.setText("Жёлтый — черновик, зелёный — сохранено, серый — группа или заблокировано правилом.")
+        elif self._has_excel_highlight():
+            self.mode_hint.setText("Оранжевым отмечены изменения между листами Excel. Подсветку можно снять.")
         else:
             self.mode_hint.setText("Просмотр: значения не меняются. Чтобы править ячейки, включите режим редактирования.")
         if self.unsaved:
@@ -638,7 +709,7 @@ class TablePage(QWidget):
         self.structure_btn.setText("Готово" if self.structure_edit else "Редактировать структуру")
 
     def _apply_edit_triggers(self) -> None:
-        editing = self.table_mode == "edit" and self.can_write and not (self.workbook or {}).get("is_primary")
+        editing = self.table_mode == "edit" and self.can_write and not self._view_only()
         if editing:
             self.table.setEditTriggers(
                 QAbstractItemView.EditTrigger.DoubleClicked | QAbstractItemView.EditTrigger.EditKeyPressed
@@ -680,7 +751,7 @@ class TablePage(QWidget):
         if row < 0 or col < 0:
             self._refresh_hints()
             return
-        item = self.table.item(row, 2 + col)
+        item = self.table.item(row, DATA_COLUMN + col)
         if item is None:
             self._refresh_hints()
             return
@@ -688,7 +759,11 @@ class TablePage(QWidget):
         try:
             if item.text() != str(text):
                 item.setText(str(text))
-            color = _status_color(cell, parameters[row].get("row_kind") or "editable")
+            color = _status_color(
+                cell,
+                parameters[row].get("row_kind") or "editable",
+                show_changes=not (self.workbook or {}).get("is_issued"),
+            )
             item.setBackground(QBrush(color) if color else QBrush())
             self._decorate_cell_item(item, cell, selected=self._selected == (param, column))
             if self._selected == (param, column):
@@ -704,6 +779,42 @@ class TablePage(QWidget):
             header.setVisible(False)
             header.setFixedWidth(0)
             grid.setCornerButtonEnabled(False)
+
+    def _parameter_column_width(self) -> int:
+        header_font = QFont(self.table.font())
+        header_font.setBold(True)
+        header_font.setPointSize(10)
+        width = QFontMetrics(header_font).horizontalAdvance("Наименование параметра") + 28
+        metrics = QFontMetrics(self.table.font())
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, 1)
+            if item is not None:
+                width = max(width, metrics.horizontalAdvance(item.text()) + 28)
+        return width
+
+    def _number_column_width(self) -> int:
+        header_font = QFont(self.table.font())
+        header_font.setBold(True)
+        header_font.setPointSize(10)
+        width = QFontMetrics(header_font).horizontalAdvance("№") + 20
+        metrics = QFontMetrics(self.table.font())
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, 0)
+            if item is not None and item.text():
+                width = max(width, metrics.horizontalAdvance(item.text()) + 16)
+        return width
+
+    def _designation_column_width(self) -> int:
+        header_font = QFont(self.table.font())
+        header_font.setBold(True)
+        header_font.setPointSize(10)
+        width = QFontMetrics(header_font).horizontalAdvance("Обозначение") + 28
+        metrics = QFontMetrics(self.table.font())
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, 2)
+            if item is not None and item.text():
+                width = max(width, metrics.horizontalAdvance(item.text()) + 28)
+        return width
 
     def _rebuild_table(self) -> None:
         catalog = self.catalog
@@ -734,31 +845,45 @@ class TablePage(QWidget):
             self._shown_parameters = parameters
             self.table_caption.setText("\n".join(titles))
             self.table_caption.setVisible(bool(titles))
-            self.table.setColumnCount(2 + len(columns))
+            self.table.setColumnCount(DATA_COLUMN + len(columns))
             self.table.setRowCount(len(parameters))
-            self.table.setHorizontalHeaderLabels(["Наименование параметра", "Ед. изм."] + [col.get("label") or "" for col in columns])
+            self.table.setHorizontalHeaderLabels(
+                ["№", "Наименование параметра", "Обозначение", "Ед. изм."] + [col.get("label") or "" for col in columns]
+            )
             header = self.table.horizontalHeader()
             header.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
-            header.resizeSection(0, 340)
             header.resizeSection(1, 80)
             header.setMinimumSectionSize(48)
             self.table.verticalHeader().setDefaultSectionSize(22)
             self._hide_row_numbers()
+            number = 0
             for row, param in enumerate(parameters):
-                label = param.get("label") or ""
                 unit = param.get("unit") or ""
-                if unit and label.endswith(f", {unit}"):
-                    label = label[: -len(unit) - 2].strip()
-                name = QTableWidgetItem(("    " * int(param.get("indent") or 0)) + label)
+                editable = param.get("row_kind") == "editable"
+                if editable:
+                    number += 1
+                row_bg = QBrush(QColor(SECTION_BG if not editable else PARAM_BG))
+                number_item = QTableWidgetItem(str(number) if editable else "")
+                number_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+                number_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                number_item.setBackground(row_bg)
+                self.table.setItem(row, 0, number_item)
+                name = QTableWidgetItem(("    " * int(param.get("indent") or 0)) + parameter_display_label(param))
                 name.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
                 name.setData(PARAM_ROLE, param.get("key"))
                 name.setData(KIND_ROLE, "param")
-                name.setBackground(QBrush(QColor(SECTION_BG if param.get("row_kind") != "editable" else PARAM_BG)))
-                self.table.setItem(row, 0, name)
-                unit_item = QTableWidgetItem(unit if param.get("row_kind") == "editable" else "")
+                name.setBackground(row_bg)
+                self.table.setItem(row, 1, name)
+                designation = QTableWidgetItem(parameter_designation(param))
+                designation.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+                designation.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                designation.setBackground(row_bg)
+                self.table.setItem(row, 2, designation)
+                unit_item = QTableWidgetItem(unit if editable else "")
                 unit_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
-                unit_item.setBackground(QBrush(QColor(SECTION_BG if param.get("row_kind") != "editable" else PARAM_BG)))
-                self.table.setItem(row, 1, unit_item)
+                unit_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                unit_item.setBackground(row_bg)
+                self.table.setItem(row, 3, unit_item)
                 for col_index, column in enumerate(columns):
                     cell = self._cells.get(f"{param.get('key')}:{column.get('key')}")
                     text = (cell or {}).get("display") or (cell or {}).get("draft_value") or (cell or {}).get("value") or ""
@@ -768,7 +893,7 @@ class TablePage(QWidget):
                         param.get("row_kind") == "editable"
                         and not (cell or {}).get("locked")
                         and not (cell or {}).get("unified")
-                        and not (self.workbook or {}).get("is_primary")
+                        and not self._view_only()
                     )
                     if editable:
                         flags |= Qt.ItemFlag.ItemIsEditable
@@ -778,15 +903,21 @@ class TablePage(QWidget):
                     item.setData(COLUMN_ROLE, column.get("key"))
                     item.setData(OPTIONS_ROLE, (cell or {}).get("options") or param.get("options") or [])
                     item.setData(KIND_ROLE, "cell")
-                    color = _status_color(cell, param.get("row_kind") or "editable")
+                    color = _status_color(
+                        cell,
+                        param.get("row_kind") or "editable",
+                        show_changes=not (self.workbook or {}).get("is_issued"),
+                    )
                     if color:
                         item.setBackground(QBrush(color))
                     self._decorate_cell_item(item, cell)
-                    self.table.setItem(row, 2 + col_index, item)
+                    self.table.setItem(row, DATA_COLUMN + col_index, item)
             self.table.resizeColumnsToContents()
             header = self.table.horizontalHeader()
-            header.resizeSection(0, 340)
-            header.resizeSection(1, 80)
+            header.resizeSection(0, self._number_column_width())
+            header.resizeSection(1, self._parameter_column_width())
+            header.resizeSection(2, self._designation_column_width())
+            header.resizeSection(3, 80)
             self.table.sync_frozen()
             self._hide_row_numbers()
             if self._selected:
@@ -803,9 +934,9 @@ class TablePage(QWidget):
         col = item.data(COLUMN_ROLE)
         if param and col:
             return str(param), str(col)
-        if param and column == 0:
-            self.struct_label.setText(self.table.item(row, 0).text().strip() if self.table.item(row, 0) else "")
-            self.struct_unit.setText(self.table.item(row, 1).text() if self.table.item(row, 1) else "")
+        if param and column == 1:
+            self.struct_label.setText(self.table.item(row, 1).text().strip() if self.table.item(row, 1) else "")
+            self.struct_unit.setText(self.table.item(row, 3).text() if self.table.item(row, 3) else "")
             return None
         return None
 
@@ -820,10 +951,10 @@ class TablePage(QWidget):
         param = next((item for item in (self.catalog or {}).get("parameters") or [] if item.get("key") == parameter_key), None)
         col = next((item for item in (self.catalog or {}).get("columns") or [] if item.get("key") == column_key), None)
         unit = (param or {}).get("unit") or ""
-        label = (param or {}).get("label") or ""
+        label = parameter_display_label(param or {})
         self.cell_caption.setText(f"{label}{', ' + unit if unit else ''} / ступень {(col or {}).get('label') or ''}")
         self.history_empty.hide()
-        editing = self.table_mode == "edit" and self.can_write and not (self.workbook or {}).get("is_primary")
+        editing = self.table_mode == "edit" and self.can_write and not self._view_only()
         self.edit_row.setVisible(editing)
         self.view_hint.setVisible(not editing)
         if cell.get("unified"):
@@ -854,25 +985,29 @@ class TablePage(QWidget):
                     if not item:
                         continue
                     cell = None
-                    if col >= 2:
-                        cell = self._cells.get(f"{param.get('key')}:{columns[col - 2].get('key')}")
-                    if col < 2:
+                    if col >= DATA_COLUMN:
+                        cell = self._cells.get(f"{param.get('key')}:{columns[col - DATA_COLUMN].get('key')}")
+                    if col < DATA_COLUMN:
                         color = QColor(SECTION_BG if param.get("row_kind") != "editable" else PARAM_BG)
                     else:
-                        color = _status_color(cell, param.get("row_kind") or "editable")
-                    if row == sel_row or (col >= 2 and col - 2 == sel_col):
+                        color = _status_color(
+                            cell,
+                            param.get("row_kind") or "editable",
+                            show_changes=not (self.workbook or {}).get("is_issued"),
+                        )
+                    if row == sel_row or (col >= DATA_COLUMN and col - DATA_COLUMN == sel_col):
                         if color is None:
                             color = QColor(HIGHLIGHT)
                     if color:
                         item.setBackground(QBrush(color))
                     else:
                         item.setBackground(QBrush())
-                    selected = row == sel_row and col >= 2 and col - 2 == sel_col
-                    if col >= 2:
+                    selected = row == sel_row and col >= DATA_COLUMN and col - DATA_COLUMN == sel_col
+                    if col >= DATA_COLUMN:
                         self._decorate_cell_item(item, cell, selected=selected)
                     else:
                         item.setForeground(QBrush(QColor("#263238")))
-                    if col < 2:
+                    if col < DATA_COLUMN:
                         self.table.paint_frozen_item(row, col, item)
         finally:
             self.table.blockSignals(blocked)
@@ -942,7 +1077,7 @@ class TablePage(QWidget):
         columns = (self.catalog or {}).get("columns") or []
         row = next((index for index, item in enumerate(parameters) if item.get("key") == parameter_key), -1)
         col = next((index for index, item in enumerate(columns) if item.get("key") == column_key), -1)
-        item = self.table.item(row, 2 + col) if row >= 0 and col >= 0 else None
+        item = self.table.item(row, DATA_COLUMN + col) if row >= 0 and col >= 0 else None
         if item:
             return item.text()
         return cell.get("display") or cell.get("draft_value") or cell.get("value") or ""
@@ -964,7 +1099,7 @@ class TablePage(QWidget):
         return any((cell or {}).get("status") == "draft" for cell in self._cells.values())
 
     def _can_save_draft(self, parameter_key: str, column_key: str) -> bool:
-        if not self.can_write or (self.workbook or {}).get("is_primary"):
+        if not self.can_write or self._view_only():
             return False
         cell = self._cells.get(f"{parameter_key}:{column_key}") or {}
         if cell.get("locked") or cell.get("unified"):
@@ -1093,11 +1228,11 @@ class TablePage(QWidget):
             self.new_column.clear()
 
     def _sheet_writable(self) -> bool:
-        return bool(self.can_write and not self.busy and not (self.workbook or {}).get("is_primary"))
+        return bool(self.can_write and not self.busy and not self._view_only())
 
     def _column_key_at(self, logical_index: int) -> str | None:
         columns = (self.catalog or {}).get("columns") or []
-        index = logical_index - 2
+        index = logical_index - DATA_COLUMN
         if 0 <= index < len(columns):
             return str(columns[index].get("key") or "") or None
         return None
@@ -1239,12 +1374,20 @@ class TablePage(QWidget):
         writable = self.can_write and not self.busy
         rename = menu.addAction("Переименовать лист", lambda: self.sheet_rename_requested.emit(sheet_id))
         rename.setEnabled(writable and not sheet.get("is_primary"))
+        if not sheet.get("is_primary"):
+            issued = menu.addAction(
+                "Версия выдана",
+                lambda _checked=False, sid=sheet_id: self.sheet_issued_requested.emit(sid),
+            )
+            issued.setCheckable(True)
+            issued.setChecked(bool(sheet.get("is_issued")))
+            issued.setEnabled(writable)
         if sheet.get("is_primary"):
             ordinary = menu.addAction("Сделать обычным листом", lambda: self.sheet_ordinary_requested.emit(sheet_id))
             ordinary.setEnabled(writable)
         else:
             primary = menu.addAction("Сделать основным", lambda: self.sheet_primary_requested.emit(sheet_id))
-            primary.setEnabled(writable)
+            primary.setEnabled(writable and not sheet.get("is_issued"))
         copy = menu.addAction("Копировать лист", lambda: self.sheet_copy_requested.emit(sheet_id))
         copy.setEnabled(writable)
         delete = menu.addAction("Удалить лист", lambda: self.sheet_delete_requested.emit(sheet_id))
@@ -1299,7 +1442,7 @@ class TablePage(QWidget):
         param, col_key = keys
         self._select_keys(param, col_key)
         cell = self._cells.get(f"{param}:{col_key}") or {}
-        locked = bool(cell.get("locked") or cell.get("unified") or (self.workbook or {}).get("is_primary"))
+        locked = bool(cell.get("locked") or cell.get("unified") or self._view_only())
         edit_act = menu.addAction("Изменить данные в ячейке", lambda: self._start_edit(param, col_key))
         edit_act.setEnabled(self.can_write and not locked and not self.busy)
         menu.addAction("Найти в таблице", self._open_find)
@@ -1308,7 +1451,7 @@ class TablePage(QWidget):
         menu.addAction("Показать историю", lambda: self._show_history_for(param, col_key))
         unify = QAction("Снять унификацию" if cell.get("unified") else "Установить унификацию", self)
         unify.triggered.connect(self._unify)
-        unify.setEnabled(self.can_write and not (self.workbook or {}).get("is_primary") and not self.busy)
+        unify.setEnabled(self.can_write and not self._view_only() and not self.busy)
         menu.addAction(unify)
         link_label = "Изменить ссылку…" if cell.get("hyperlink") else "Добавить ссылку…"
         link_act = menu.addAction(link_label, lambda: self._edit_hyperlink(param, col_key))
@@ -1318,7 +1461,7 @@ class TablePage(QWidget):
             clear_link = menu.addAction("Удалить ссылку", lambda: self._set_hyperlink(param, col_key, None))
             clear_link.setEnabled(self.can_write and not locked and not self.busy)
         comment_act = menu.addAction("Оставить комментарий", self._open_comment)
-        comment_act.setEnabled(self.can_write and not cell.get("locked") and not (self.workbook or {}).get("is_primary"))
+        comment_act.setEnabled(self.can_write and not cell.get("locked") and not self._view_only())
         save_act = menu.addAction("Сохранить черновик", lambda: self._start_draft_save(param, col_key))
         save_act.setEnabled(self._can_save_draft(param, col_key) and not self.busy)
         all_act = menu.addAction("Сохранить все черновики", lambda: self.save_all_drafts_requested.emit())
@@ -1334,7 +1477,7 @@ class TablePage(QWidget):
         self._select_keys(parameter_key, column_key)
         row = self.table.currentRow()
         col = self.table.currentColumn()
-        if row >= 0 and col >= 2:
+        if row >= 0 and col >= DATA_COLUMN:
             self.table.editItem(self.table.item(row, col))
 
     def _open_comment(self) -> None:
