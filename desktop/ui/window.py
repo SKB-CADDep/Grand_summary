@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QSize, QTimer
@@ -37,21 +38,157 @@ from desktop.ui.table_page import TablePage
 from desktop.ui.triangle_page import TrianglePage
 
 APP_TOUR = [
-    {"title": "Меню и справка", "body": "Файл обновляет окно. Стрелки влево/вправо — отменить и повторить действия этой сессии (Ctrl+Z / Ctrl+Y), как в Word. Справка — инструкция и журналы. Кнопка «?» снова открывает обучение.", "target": "guide-menu"},
-    {"title": "Три вкладки", "body": "Сначала объект и треугольники, затем таблица исходных данных, затем отчёт. Без выбранного объекта таблица и отчёт закрыты.", "target": "guide-tabs", "tab": "object"},
-    {"title": "Объект", "body": "Начните вводить название — появится список подходящих объектов. Выберите нужный. Объекты берутся из каталога и в программе не создаются.", "target": "guide-object", "tab": "object"},
-    {"title": "Треугольники", "body": "Файл тепловиков заполняет ячейки по подписи параметра и номеру ступени. Импорт создаёт версию 0.", "target": "guide-triangle", "tab": "object"},
-    {"title": "Таблица ИД", "body": "Параметры в строках, ступени и КУ в колонках. Жёлтый — черновик, зелёный — сохранено с комментарием.", "target": "guide-tab-table", "tab": "table"},
-    {"title": "Отчёт", "body": "Короткая служебка или полная сводка в Word. Комментарии в файл не попадают.", "target": "guide-tab-report", "tab": "report"},
-    {"title": "Уведомления", "body": "Если значение подтвердил другой автор, предыдущему приходит уведомление. Имя пользователя Windows подставляется само.", "target": "guide-notes"},
+    {
+        "title": "Меню и справка",
+        "lead": "Верхняя полоса управляет окном и возвращает к этому обучению.",
+        "points": [
+            "«Файл → Обновить» заново загружает объекты, открытую сводку и уведомления.",
+            "Стрелки отменяют и повторяют действия этой сессии, как в Word: Ctrl+Z и Ctrl+Y.",
+            "«Журнал изменений пользователей» показывает, кто и какие значения правил.",
+            "«Справка» открывает инструкцию, сведения о программе и журнал изменений приложения.",
+            "Круглая кнопка «?» в любой момент запускает обучение заново.",
+        ],
+        "target": "guide-menu",
+    },
+    {
+        "title": "Вкладки",
+        "lead": "Работа идёт слева направо: сначала объект, затем данные, затем документ.",
+        "points": [
+            "«Объект и треугольники» — выбор турбины и загрузка файла тепловиков.",
+            "«Таблица ИД» — параметры по ступеням. Без выбранного объекта вкладка закрыта.",
+            "«Отчёт» собирает файл Word и тоже открывается только после выбора объекта.",
+        ],
+        "target": "guide-tabs",
+        "tab": "object",
+    },
+    {
+        "title": "Объект",
+        "lead": "Сводка всегда привязана к объекту из каталога.",
+        "points": [
+            "Начните вводить название: станцию, тип турбины или заводской номер.",
+            "В списке останутся подходящие объекты. Щёлкните нужный, чтобы открыть его сводку.",
+            "Новый объект в программе не создаётся: список берётся из каталога.",
+        ],
+        "target": "guide-object",
+        "tab": "object",
+    },
+    {
+        "title": "Треугольники",
+        "lead": "Эта кнопка переносит числа из файла тепловиков в сводку.",
+        "points": [
+            "В файл входят листы геометрии, проточной части и остальные листы книги.",
+            "Значение встаёт в ячейку по названию параметра и номеру ступени.",
+            "Импорт создаёт версию 0. Дальше её правят уже в таблице ИД.",
+        ],
+        "target": "guide-triangle",
+        "tab": "object",
+    },
+    {
+        "title": "Таблица ИД",
+        "lead": "Эта вкладка открывает таблицу исходных данных выбранного объекта.",
+        "points": [
+            "Строки — параметры: высоты, углы, площади и остальные величины.",
+            "Колонки — ступени и камеры КУ.",
+            "Жёлтая ячейка ещё не сохранена, зелёная уже записана с комментарием.",
+        ],
+        "target": "guide-tab-table",
+        "tab": "table",
+    },
+    {
+        "title": "Отчёт",
+        "lead": "Эта вкладка собирает документ Word по текущей сводке.",
+        "points": [
+            "Можно выгрузить короткую служебку или полную сводку.",
+            "В файл попадают значения и ссылки на чертежи.",
+            "Комментарии к ячейкам в Word не выводятся.",
+        ],
+        "target": "guide-tab-report",
+        "tab": "report",
+    },
+    {
+        "title": "Уведомления",
+        "lead": "Кнопка показывает сообщения о чужих правках.",
+        "points": [
+            "Если другой автор сохранил значение, предыдущему автору приходит уведомление.",
+            "Пока уведомления не прочитаны, кнопка красная, с восклицательным знаком и лёгким миганием.",
+            "Имя пользователя подставляется из Windows, вводить его не нужно.",
+        ],
+        "target": "guide-notes",
+    },
 ]
 
 TABLE_TOUR = [
-    {"title": "Режимы таблицы", "body": "По умолчанию — просмотр: клик по ячейке только выделяет строку и столбец и показывает историю. Чтобы вводить значения, включите режим редактирования.", "target": "guide-table-mode", "tab": "table"},
-    {"title": "Цвета ячеек", "body": "Жёлтый — несохранённый черновик. Зелёный — зафиксировано. Серый — заголовок группы или поле, заблокированное правилом.", "target": "guide-colors", "tab": "table"},
-    {"title": "Таблица", "body": "В режиме редактирования значение вводится в самой ячейке. Стрелки на клавиатуре переключают ячейки. Правка без комментария остаётся жёлтой.", "target": "guide-sheet", "tab": "table"},
-    {"title": "Сохранение", "body": "Комментарий обязателен. Можно указать ссылку на чертёж — она уйдёт в Word, комментарий нет. «Отменить черновик» возвращает последнее сохранённое значение.", "target": "guide-edit", "tab": "table"},
-    {"title": "Структура таблицы", "body": "«Редактировать структуру»: имя, единицы, уровень вложенности, добавление и удаление строк. Меняется только текущая сводка.", "target": "guide-add-param", "tab": "table"},
+    {
+        "title": "Режимы таблицы",
+        "lead": "Две кнопки слева переключают просмотр и правку.",
+        "points": [
+            "Глаз — просмотр. Клик выделяет строку и столбец и показывает историю, число не меняется.",
+            "Карандаш — редактирование. Значение вводится прямо в ячейке.",
+            "При открытии таблицы всегда включён просмотр, чтобы случайно не затереть число.",
+        ],
+        "target": "guide-table-mode",
+        "tab": "table",
+    },
+    {
+        "title": "Цвета ячеек",
+        "lead": "Цвет фона показывает, в каком состоянии значение.",
+        "points": [
+            "Жёлтый — черновик: число уже изменено, но ещё не сохранено с комментарием.",
+            "Зелёный — значение зафиксировано.",
+            "Серый — заголовок группы или поле, которое закрыло правило.",
+            "Оранжевый — число пришло из Excel и ещё подсвечено как импорт.",
+        ],
+        "target": "guide-table",
+        "tab": "table",
+    },
+    {
+        "title": "Ввод значения",
+        "lead": "В режиме карандаша правка идёт в самой ячейке таблицы.",
+        "points": [
+            "Щёлкните ячейку и введите число. Десятичная запятая сохранится точкой: 0,01 станет 0.01.",
+            "Стрелки на клавиатуре переходят к соседней ячейке.",
+            "Пока нет комментария, ячейка остаётся жёлтой.",
+            "Если у ячейки есть ссылка, курсор становится рукой. Ссылку открывает Ctrl и левая кнопка мыши.",
+        ],
+        "target": "guide-table",
+        "tab": "table",
+    },
+    {
+        "title": "Листы",
+        "lead": "Полоса вкладок — версии одной сводки.",
+        "points": [
+            "Каждая вкладка — отдельный лист: исходный, копия или выданная версия.",
+            "Правый клик по вкладке: переименовать, копировать, удалить или сделать основным.",
+            "Лист с пометкой «версия выдана» и основной лист открываются только для просмотра.",
+        ],
+        "target": "guide-sheet",
+        "tab": "table",
+    },
+    {
+        "title": "Сохранение",
+        "lead": "Панель справа записывает значение и хранит историю выбранной ячейки.",
+        "points": [
+            "«Сохранить значение» требует комментарий: без него число останется жёлтым черновиком.",
+            "В поле ссылки можно указать чертёж. Ссылка попадёт в Word, комментарий — нет.",
+            "«Отменить черновик» возвращает последнее сохранённое значение.",
+            "Ниже видно, кто, когда и с каким комментарием менял ячейку.",
+            "Правый клик по панели истории скрывает её или переносит вниз либо вправо.",
+        ],
+        "target": "guide-edit",
+        "tab": "table",
+    },
+    {
+        "title": "Структура таблицы",
+        "lead": "Кнопка меняет состав строк и столбцов только у текущей сводки.",
+        "points": [
+            "Можно поправить наименование, единицу измерения и уровень вложенности.",
+            "«Добавить» создаёт строку, «Добавить вложенный» — строку внутри группы, «Удалить» убирает выбранную.",
+            "Там же переименовываются и добавляются столбцы шапки.",
+            "На основном и выданном листе кнопка скрыта: такой лист только для просмотра.",
+        ],
+        "target": "guide-add-param",
+        "tab": "table",
+    },
 ]
 
 
@@ -100,8 +237,6 @@ class MainWindow(QMainWindow):
         shell_layout.setSpacing(0)
         self.chrome = MenuBar()
         self.chrome.refresh_requested.connect(self._refresh_application)
-        self.chrome.toggle_history_requested.connect(self._toggle_history_panel)
-        self.chrome.history_position_requested.connect(self._set_history_position)
         self.chrome.instruction_requested.connect(self._show_instruction)
         self.chrome.about_requested.connect(self._about)
         self.chrome.changelog_requested.connect(self._show_changelog)
@@ -154,6 +289,8 @@ class MainWindow(QMainWindow):
         self.poll_revision = QTimer(self)
         self.poll_revision.timeout.connect(self._poll_revision)
         self.poll_revision.start(10_000)
+        self._backup_running = False
+        QTimer.singleShot(8_000, self._backup_database)
 
         self.reload_all()
         self._load_history_prefs()
@@ -193,6 +330,7 @@ class MainWindow(QMainWindow):
         self.table_page.last_comment_needed.connect(self._last_comment)
         self.table_page.save_all_drafts_requested.connect(self._open_unsaved)
         self.table_page.history_panel_toggled.connect(self._on_table_history_toggle)
+        self.table_page.history_position_requested.connect(self._set_history_position)
         self.report_page.preview_requested.connect(self._load_report_sheet)
         self.report_page.export_requested.connect(self._export_report)
 
@@ -265,7 +403,6 @@ class MainWindow(QMainWindow):
                 self.catalog, self.workbook.get("cells") or [], self.busy, self.workbook.get("id")
             )
         self._refresh_history_actions()
-        self.chrome.set_history_prefs(self.history_panel_open, self.history_position)
 
     def _refresh_history_actions(self) -> None:
         can_undo = self.can_write and not self.busy and bool(self.undo_stack)
@@ -996,18 +1133,13 @@ class MainWindow(QMainWindow):
             self._info(f"Установлена последняя версия ({status.get('current_version')}).")
             return
         latest = status.get("latest_version") or "новая версия"
-        if QMessageBox.question(self, "Обновление", f"Доступна версия {latest}. Обновить и перезапустить приложение?") != QMessageBox.StandardButton.Yes:
+        if QMessageBox.question(self, "Обновление", f"Доступна версия {latest}. Скачать её и перезапустить приложение?") != QMessageBox.StandardButton.Yes:
             return
         try:
             result = self.client.apply_update()
             self._info(f"Обновление до версии {result.get('version')} запущено. Приложение перезапустится.")
         except Exception as exc:
             self._fail(exc)
-
-    def _toggle_history_panel(self) -> None:
-        self.history_panel_open = not self.history_panel_open
-        self._save_history_prefs()
-        self._refresh_pages()
 
     def _set_history_position(self, position: str) -> None:
         self.history_position = position
@@ -1019,7 +1151,6 @@ class MainWindow(QMainWindow):
         self.history_panel_open = opened
         self._save_history_prefs()
         self.table_page.set_history_layout(self.history_position, self.history_panel_open, self.history_sizes)
-        self.chrome.set_history_prefs(self.history_panel_open, self.history_position)
 
     def _load_history_prefs(self) -> None:
         try:
@@ -1035,7 +1166,6 @@ class MainWindow(QMainWindow):
             "bottom": int(prefs.get("history_bottom_height") or 260),
         }
         self.table_page.set_history_layout(self.history_position, self.history_panel_open, self.history_sizes)
-        self.chrome.set_history_prefs(self.history_panel_open, self.history_position)
 
     def _save_history_prefs(self) -> None:
         try:
@@ -1049,6 +1179,23 @@ class MainWindow(QMainWindow):
             )
         except Exception:
             pass
+
+    def _backup_database(self) -> None:
+        if self._backup_running:
+            return
+        self._backup_running = True
+
+        def worker() -> None:
+            try:
+                from src.services.db_backup import rotate_tiered_backups
+
+                rotate_tiered_backups()
+            except Exception:
+                pass
+            finally:
+                self._backup_running = False
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _poll_notes(self) -> None:
         try:
@@ -1092,29 +1239,56 @@ class MainWindow(QMainWindow):
         except Exception:
             self.table_page.show_comment_tooltip(None)
 
+    def _table_guide_ready(self) -> bool:
+        return self.tab == "table" and bool(self.selected_id) and self.workbook is not None
+
     def _offer_guide(self) -> None:
-        choice = GuideChoiceDialog(self)
+        choice = GuideChoiceDialog(self, table_ready=self._table_guide_ready())
         if not choice.exec():
             self._mark_guide_seen()
             return
-        self._start_guide(choice.kind)
+        kind = choice.kind
+        choice.deleteLater()
+        QTimer.singleShot(0, lambda: self._start_guide(kind))
+
+    def _forget_guide(self, obj=None) -> None:
+        if obj is None or obj is self.guide_overlay:
+            self.guide_overlay = None
+
+    def _drop_guide_overlay(self) -> None:
+        overlay = self.guide_overlay
+        self.guide_overlay = None
+        if overlay is None:
+            return
+        try:
+            overlay.close()
+            overlay.deleteLater()
+        except RuntimeError:
+            pass
 
     def _start_guide(self, kind: str) -> None:
+        if not self.isVisible():
+            return
+        if kind == "table" and not self._table_guide_ready():
+            return
+        self._drop_guide_overlay()
         steps = APP_TOUR if kind == "app" else TABLE_TOUR
-        if kind == "table":
-            self.tab = "table"
-            self._refresh_pages()
-        if self.guide_overlay:
-            self.guide_overlay.close()
-        self.guide_overlay = GuideOverlay(steps, self, self._guide_focus)
-        self.guide_overlay.finished.connect(self._mark_guide_seen)
-        self.guide_overlay.show()
+        overlay = GuideOverlay(steps, self, self._guide_focus)
+        self.guide_overlay = overlay
+        overlay.finished.connect(self._mark_guide_seen)
+        overlay.destroyed.connect(self._forget_guide)
+        overlay.setGeometry(self.rect())
+        overlay.show()
 
     def _guide_focus(self, step: dict) -> None:
         tab = step.get("tab")
-        if tab:
+        if tab and tab != "table" and tab != self.tab:
             self.tab = tab
             self._refresh_pages()
+        elif tab and tab != "table":
+            self.tab_strip.set_current(tab)
+        if step.get("target") == "guide-edit":
+            self.table_page.set_history_layout(self.history_position, True, self.history_sizes)
 
     def _mark_guide_seen(self) -> None:
         try:
@@ -1181,14 +1355,23 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "О приложении",
-            f"Гранд сводка ИД {version}\nПользователь: {self.username}\nПрава: {rights}\nСистема управления исходными данными проточных частей турбин.",
+            f"Гранд сводка ИД {version}\n"
+            f"Пользователь: {self.username}\n"
+            f"Права: {rights}\n"
+            "Система управления исходными данными проточных частей турбин.\n"
+            "Разработчик: Гаврилова Н.Я., ОАП",
         )
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
-        if self.guide_overlay:
-            self.guide_overlay.setGeometry(self.rect())
-            self.guide_overlay._place()
+        overlay = self.guide_overlay
+        if overlay is None:
+            return
+        try:
+            overlay.setGeometry(self.rect())
+            overlay._place()
+        except RuntimeError:
+            self.guide_overlay = None
 
     def closeEvent(self, event) -> None:  # noqa: N802
         if self.unsaved and self.workbook:

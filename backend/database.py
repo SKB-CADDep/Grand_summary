@@ -92,6 +92,7 @@ def _migrate_sqlite() -> None:
         "ALTER TABLE cells ADD COLUMN excel_highlight BOOLEAN DEFAULT 0",
         "ALTER TABLE cells ADD COLUMN updated_at DATETIME",
         "ALTER TABLE cells ADD COLUMN updated_by VARCHAR(128)",
+        "ALTER TABLE cell_changes ADD COLUMN user_journal BOOLEAN NOT NULL DEFAULT 1",
     ]
     with engine.begin() as conn:
         for sql in statements:

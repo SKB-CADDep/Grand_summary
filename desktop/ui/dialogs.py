@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from PyQt6.QtCore import QRect, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QPainter, QPen
+from PyQt6.QtCore import QPoint, QRect, QSize, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QColor, QPainter, QPen, QRegion
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -26,28 +26,31 @@ from PyQt6.QtWidgets import (
 
 
 class GuideChoiceDialog(QDialog):
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, *, table_ready: bool = False) -> None:
         super().__init__(parent)
         self.setWindowTitle("Обучение")
         self.kind = "app"
-        self.resize(480, 220)
+        self.resize(520, 260)
         layout = QVBoxLayout(self)
         title = QLabel("Обучение")
         title.setStyleSheet("background: #1f5e93; color: white; font-weight: 600; padding: 14px 18px;")
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(title)
         body = QLabel(
-            "Короткий тур: обведём основные элементы и кратко поясним, зачем они нужны. "
-            "Обзор — вкладки и объект. Работа с таблицей — цвета, сохранение и отчёт."
+            "Обзор приложения можно пройти сразу: вкладки, объект и треугольники.\n"
+            "Работа с таблицей открывается только на вкладке «Таблица ИД», когда объект уже выбран."
         )
         body.setWordWrap(True)
         body.setStyleSheet("padding: 16px 18px;")
         layout.addWidget(body)
         row = QHBoxLayout()
-        row.setContentsMargins(16, 0, 16, 16)
+        row.setContentsMargins(16, 0, 16, 8)
         app_btn = QPushButton("Обзор приложения")
         table_btn = QPushButton("Работа с таблицей")
         close_btn = QPushButton("Закрыть")
+        table_btn.setEnabled(table_ready)
+        if not table_ready:
+            table_btn.setToolTip("Выберите объект и откройте вкладку «Таблица ИД».")
         app_btn.clicked.connect(lambda: self._pick("app"))
         table_btn.clicked.connect(lambda: self._pick("table"))
         close_btn.clicked.connect(self.reject)
@@ -56,6 +59,12 @@ class GuideChoiceDialog(QDialog):
         row.addStretch(1)
         row.addWidget(close_btn)
         layout.addLayout(row)
+        if not table_ready:
+            hint = QLabel("Сейчас «Работа с таблицей» недоступна: нужен выбранный объект и вкладка «Таблица ИД».")
+            hint.setWordWrap(True)
+            hint.setProperty("role", "hint")
+            hint.setStyleSheet("padding: 0 18px 16px 18px;")
+            layout.addWidget(hint)
 
     def _pick(self, kind: str) -> None:
         self.kind = kind
@@ -72,31 +81,45 @@ class GuideOverlay(QWidget):
         self._host = host
         self._on_step = on_step
         self._hole = QRect()
+        self._placing = False
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAutoFillBackground(False)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
         self.setGeometry(host.rect())
         self.raise_()
         self.card = QFrame(self)
+        self.card.setObjectName("guide-card")
         self.card.setStyleSheet(
-            "QFrame { background: #ffffff; border: 1px solid #d9e3f0; border-radius: 12px; }"
+            "QFrame#guide-card { background: #ffffff; border: 1px solid #d9e3f0; border-radius: 12px; }"
+            "QFrame#guide-card QLabel { background: transparent; border: none; }"
         )
         card_layout = QVBoxLayout(self.card)
+        card_layout.setContentsMargins(16, 14, 16, 12)
+        card_layout.setSpacing(8)
         self.progress = QLabel()
+        self.progress.setStyleSheet("color: #607d8b; font-size: 12px;")
         self.title = QLabel()
-        self.title.setStyleSheet("font-weight: 600; font-size: 15px;")
-        self.body = QLabel()
-        self.body.setWordWrap(True)
-        self.body.setMaximumWidth(320)
+        self.title.setStyleSheet("font-weight: 700; font-size: 16px; color: #1a365d;")
+        self.title.setWordWrap(True)
+        self.lead = QLabel()
+        self.lead.setWordWrap(True)
+        self.lead.setStyleSheet("color: #37474f; font-size: 13px;")
+        self.points_box = QWidget()
+        self.points_layout = QVBoxLayout(self.points_box)
+        self.points_layout.setContentsMargins(0, 2, 0, 2)
+        self.points_layout.setSpacing(8)
         card_layout.addWidget(self.progress)
         card_layout.addWidget(self.title)
-        card_layout.addWidget(self.body)
+        card_layout.addWidget(self.lead)
+        card_layout.addWidget(self.points_box)
         row = QHBoxLayout()
         self.back_btn = QPushButton("Назад")
         self.next_btn = QPushButton("Далее")
         skip = QPushButton("Пропустить обучение")
         skip.setFlat(True)
-        skip.setStyleSheet("color: #1565c0; border: none; background: none; text-align: left;")
+        skip.setStyleSheet("color: #1565c0; border: none; background: none; text-align: left; padding: 0;")
         self.back_btn.clicked.connect(self._back)
         self.next_btn.clicked.connect(self._next)
         skip.clicked.connect(self._skip)
@@ -105,30 +128,71 @@ class GuideOverlay(QWidget):
         row.addWidget(self.next_btn)
         card_layout.addLayout(row)
         card_layout.addWidget(skip)
-        self.card.setFixedWidth(340)
+        self.card.setFixedWidth(460)
         self._render()
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
-        self.setGeometry(self._host.rect())
         self._place()
 
     def paintEvent(self, event) -> None:  # noqa: N802
         painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor(0, 0, 0, 90))
-        if not self._hole.isNull():
-            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
-            painter.fillRect(self._hole.adjusted(-6, -6, 6, 6), Qt.GlobalColor.transparent)
-            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
-            painter.setPen(QPen(QColor("#1565c0"), 2))
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawRoundedRect(self._hole.adjusted(-6, -6, 6, 6), 8, 8)
+        dim = QColor(20, 32, 48, 130)
+        if self._hole.isNull():
+            painter.fillRect(self.rect(), dim)
+            return
+        hole = self._hole.adjusted(-4, -4, 4, 4)
+        full = self.rect()
+        painter.fillRect(QRect(0, 0, full.width(), max(0, hole.top())), dim)
+        painter.fillRect(QRect(0, hole.bottom() + 1, full.width(), max(0, full.height() - hole.bottom() - 1)), dim)
+        painter.fillRect(QRect(0, hole.top(), max(0, hole.left()), hole.height()), dim)
+        painter.fillRect(
+            QRect(hole.right() + 1, hole.top(), max(0, full.width() - hole.right() - 1), hole.height()),
+            dim,
+        )
+        painter.setPen(QPen(QColor("#1565c0"), 3))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRect(hole.adjusted(-2, -2, 2, 2))
 
     def _target(self) -> QWidget | None:
         name = self._steps[self._index].get("target")
         if not name:
             return None
-        return self._host.findChild(QWidget, name)
+        widget = self._host.findChild(QWidget, name)
+        if widget is None or not widget.isVisible():
+            return None
+        return widget
+
+    def _points(self, step: dict) -> list[str]:
+        points = [str(item).strip() for item in (step.get("points") or []) if str(item).strip()]
+        if points:
+            return points
+        body = str(step.get("body") or "").strip()
+        return [body] if body else []
+
+    def _fill_points(self, lines: list[str]) -> None:
+        while self.points_layout.count():
+            item = self.points_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+        for line in lines:
+            host = QWidget()
+            row = QHBoxLayout(host)
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(8)
+            mark = QLabel("●")
+            mark.setStyleSheet("color: #1565c0; font-size: 9px;")
+            mark.setFixedWidth(12)
+            mark.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
+            text = QLabel(line)
+            text.setWordWrap(True)
+            text.setFixedWidth(400)
+            text.setStyleSheet("color: #263238; font-size: 13px;")
+            row.addWidget(mark, 0, Qt.AlignmentFlag.AlignTop)
+            row.addWidget(text, 1)
+            self.points_layout.addWidget(host)
 
     def _render(self) -> None:
         step = self._steps[self._index]
@@ -136,23 +200,87 @@ class GuideOverlay(QWidget):
             self._on_step(step)
         self.progress.setText(f"Шаг {self._index + 1} из {len(self._steps)}")
         self.title.setText(step.get("title") or "")
-        self.body.setText(step.get("body") or "")
+        lead = str(step.get("lead") or "").strip()
+        self.lead.setText(lead)
+        self.lead.setVisible(bool(lead))
+        self._fill_points(self._points(step))
         self.back_btn.setEnabled(self._index > 0)
         self.next_btn.setText("Готово" if self._index == len(self._steps) - 1 else "Далее")
+        self.card.adjustSize()
         self._place()
         self.update()
+        QTimer.singleShot(0, self._place)
 
     def _place(self) -> None:
+        if self._placing:
+            return
+        self._placing = True
+        try:
+            self._place_now()
+        finally:
+            self._placing = False
+
+    def _place_now(self) -> None:
         target = self._target()
-        if target and target.isVisible():
-            self._hole = QRect(target.mapTo(self, target.rect().topLeft()), target.size())
+        if target is not None:
+            origin = self.mapFromGlobal(target.mapToGlobal(QPoint(0, 0)))
+            self._hole = QRect(origin, target.size()).intersected(self.rect())
+            if self._hole.width() < 2 or self._hole.height() < 2:
+                self._hole = QRect()
         else:
             self._hole = QRect()
-        card_w, card_h = 340, 220
-        left = min(max(12, self._hole.right() + 16 if not self._hole.isNull() else 24), self.width() - card_w - 12)
-        top = min(max(12, self._hole.top() if not self._hole.isNull() else 48), self.height() - card_h - 12)
-        self.card.move(left, top)
+        self._move_card()
+        self._cut_hole()
+        self.card.raise_()
+        self.raise_()
+        self.update()
+
+    def _move_card(self) -> None:
         self.card.adjustSize()
+        card = QSize(self.card.width(), max(self.card.height(), 1))
+        margin, gap = 12, 16
+        bounds = self.rect().adjusted(margin, margin, -margin, -margin)
+        hole = self._hole
+        spots = [QPoint(margin, 48)]
+        if not hole.isNull():
+            spots = [
+                QPoint(hole.right() + gap, hole.top()),
+                QPoint(hole.left() - gap - card.width(), hole.top()),
+                QPoint(hole.left(), hole.bottom() + gap),
+                QPoint(hole.right() - card.width(), hole.bottom() + gap),
+                QPoint(hole.left(), hole.top() - gap - card.height()),
+            ]
+        for spot in spots:
+            rect = QRect(spot, card)
+            if rect.right() > bounds.right():
+                rect.moveRight(bounds.right())
+            if rect.left() < bounds.left():
+                rect.moveLeft(bounds.left())
+            if rect.bottom() > bounds.bottom():
+                rect.moveBottom(bounds.bottom())
+            if rect.top() < bounds.top():
+                rect.moveTop(bounds.top())
+            if hole.isNull() or not rect.intersects(hole.adjusted(-8, -8, 8, 8)):
+                self.card.move(rect.topLeft())
+                return
+        self.card.move(max(bounds.left(), bounds.right() - card.width()), max(bounds.top(), bounds.bottom() - card.height()))
+
+    def _cut_hole(self) -> None:
+        if self._hole.isNull() or self.width() < 2 or self.height() < 2:
+            self.clearMask()
+            return
+        opening = self._hole.adjusted(-4, -4, 4, 4).intersected(self.rect())
+        if opening.width() < 2 or opening.height() < 2:
+            self.clearMask()
+            return
+        card = self.card.geometry().adjusted(-4, -4, 4, 4).intersected(self.rect().adjusted(-8, -8, 8, 8))
+        region = QRegion(self.rect()).subtracted(QRegion(opening))
+        if card.width() > 1 and card.height() > 1:
+            region = region.united(QRegion(card))
+        if region.isEmpty():
+            self.clearMask()
+            return
+        self.setMask(region)
 
     def _back(self) -> None:
         self._index = max(0, self._index - 1)
@@ -207,7 +335,8 @@ class GuideDialog(QDialog):
         step = self._steps[self._index]
         self.progress.setText(f"Шаг {self._index + 1} из {len(self._steps)}")
         self.title.setText(step.get("title") or "")
-        self.body.setText(step.get("body") or "")
+        points = [str(item).strip() for item in (step.get("points") or []) if str(item).strip()]
+        self.body.setText("\n".join(f"• {item}" for item in points) if points else (step.get("body") or ""))
         self.back_btn.setEnabled(self._index > 0)
         self.next_btn.setText("Готово" if self._index == len(self._steps) - 1 else "Далее")
 

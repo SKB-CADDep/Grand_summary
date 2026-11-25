@@ -585,6 +585,7 @@ def sync_triangle_data(
             value=value,
             system=True,
             existing_cell=cell,
+            user_journal=mode != "all",
         )
         if value:
             cell.status = "triangle"
@@ -596,18 +597,24 @@ def sync_triangle_data(
     for cell, value, _comment, _parameter_label, _column_label in planned:
         if value:
             workbook_service.apply_rules(
-                session, target_workbook, cell.parameter_key, cell.column_key, username
+                session,
+                target_workbook,
+                cell.parameter_key,
+                cell.column_key,
+                username,
+                user_journal=mode != "all",
             )
     workbook_service.compact_sheet(session, target_workbook)
 
-    add_audit(
-        session,
-        actor=username,
-        action="triangle_sync",
-        workbook=target_workbook,
-        comment="Синхронизация значений из импортированных треугольников",
-        summary=f"Из треугольников: обновлено {updated}, очищено {cleared}, пропущено {skipped + len(conflicts)}",
-    )
+    if mode != "all":
+        add_audit(
+            session,
+            actor=username,
+            action="triangle_sync",
+            workbook=target_workbook,
+            comment="Синхронизация значений из импортированных треугольников",
+            summary=f"Из треугольников: обновлено {updated}, очищено {cleared}, пропущено {skipped + len(conflicts)}",
+        )
     session.flush()
     return {
         "updated": updated,

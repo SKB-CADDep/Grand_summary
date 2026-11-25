@@ -244,6 +244,7 @@ class TablePage(QWidget):
     cell_selected = pyqtSignal(str, str)
     save_all_drafts_requested = pyqtSignal()
     history_panel_toggled = pyqtSignal(bool)
+    history_position_requested = pyqtSignal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -304,7 +305,6 @@ class TablePage(QWidget):
         self.edit_btn.setIcon(pencil_icon())
         self.view_btn.setProperty("modeBtn", True)
         self.edit_btn.setProperty("modeBtn", True)
-        self.view_btn.setObjectName("guide-table-mode")
         self.view_btn.setToolTip("Режим просмотра")
         self.edit_btn.setToolTip("Режим редактирования")
         self.view_btn.setCheckable(True)
@@ -312,8 +312,14 @@ class TablePage(QWidget):
         self.view_btn.setChecked(True)
         self.view_btn.clicked.connect(lambda: self.set_mode("view"))
         self.edit_btn.clicked.connect(lambda: self.set_mode("edit"))
-        toolbar.addWidget(self.view_btn)
-        toolbar.addWidget(self.edit_btn)
+        self.mode_box = QWidget()
+        self.mode_box.setObjectName("guide-table-mode")
+        mode_layout = QHBoxLayout(self.mode_box)
+        mode_layout.setContentsMargins(0, 0, 0, 0)
+        mode_layout.setSpacing(4)
+        mode_layout.addWidget(self.view_btn)
+        mode_layout.addWidget(self.edit_btn)
+        toolbar.addWidget(self.mode_box)
         self.mode_hint = QLabel()
         self.mode_hint.setProperty("role", "hint")
         toolbar.addWidget(self.mode_hint, 1)
@@ -1446,10 +1452,21 @@ class TablePage(QWidget):
                 return True
         return super().eventFilter(watched, event)
 
-    def _exec_history_menu(self, global_pos) -> None:
+    def _history_context_menu(self) -> QMenu:
         menu = QMenu(self)
         menu.addAction("Скрыть историю", lambda: self._set_history_visible(False))
-        menu.exec(global_pos)
+        menu.addSeparator()
+        heading = menu.addAction("Расположение панели")
+        heading.setEnabled(False)
+        right = menu.addAction("Справа", lambda: self.history_position_requested.emit("right"))
+        bottom = menu.addAction("Снизу", lambda: self.history_position_requested.emit("bottom"))
+        on_bottom = self._history_position == "bottom"
+        right.setText("Справа" if on_bottom else "✓ Справа")
+        bottom.setText("✓ Снизу" if on_bottom else "Снизу")
+        return menu
+
+    def _exec_history_menu(self, global_pos) -> None:
+        self._history_context_menu().exec(global_pos)
 
     def _history_menu(self, pos) -> None:
         if not self.history_panel.isVisible():

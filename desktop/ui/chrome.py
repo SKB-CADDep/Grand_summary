@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PyQt6.QtCore import QEvent, QSize, Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont, QFontMetrics, QIcon
 from PyQt6.QtWidgets import (
     QFrame,
@@ -20,8 +20,6 @@ from desktop.ui.icons import redo_icon, undo_icon
 
 class MenuBar(QFrame):
     refresh_requested = pyqtSignal()
-    toggle_history_requested = pyqtSignal()
-    history_position_requested = pyqtSignal(str)
     instruction_requested = pyqtSignal()
     about_requested = pyqtSignal()
     changelog_requested = pyqtSignal()
@@ -45,35 +43,31 @@ class MenuBar(QFrame):
         self.file_menu.addAction("Обновить", self.refresh_requested.emit)
         self.file_btn.setMenu(self.file_menu)
 
-        self.view_btn = self._menu_btn("Представление")
-        self.view_menu = QMenu(self)
-        self.view_menu.setObjectName("view-menu")
-        self.history_toggle = self.view_menu.addAction("Скрыть панель истории", self.toggle_history_requested.emit)
-        self.view_menu.addSeparator()
-        pos = self.view_menu.addAction("Расположение панели")
-        pos.setEnabled(False)
-        self.hist_right = self.view_menu.addAction("✓ Справа", lambda: self.history_position_requested.emit("right"))
-        self.hist_bottom = self.view_menu.addAction("Снизу", lambda: self.history_position_requested.emit("bottom"))
-        self.view_btn.setMenu(self.view_menu)
-
         self.undo_btn = self._history_btn(undo_icon(), "Отменить", "Отменить (Ctrl+Z)")
         self.undo_btn.setObjectName("guide-undo")
         self.undo_btn.clicked.connect(self.undo_requested.emit)
         self.redo_btn = self._history_btn(redo_icon(), "Повторить", "Повторить (Ctrl+Y)")
         self.redo_btn.clicked.connect(self.redo_requested.emit)
 
+        self.journal_btn = self._menu_btn("Журнал изменений пользователей")
+        self.journal_btn.clicked.connect(self.journal_requested.emit)
+
         self.help_btn = self._menu_btn("Справка")
         help_menu = QMenu(self)
         help_menu.addAction("Инструкция", self.instruction_requested.emit)
         help_menu.addAction("О приложении", self.about_requested.emit)
         help_menu.addAction("Журнал изменений приложения", self.changelog_requested.emit)
-        help_menu.addAction("Журнал изменений пользователей", self.journal_requested.emit)
         help_menu.addAction("Обучение", self.guide_requested.emit)
         self.help_btn.setMenu(help_menu)
 
         self.notes_btn = self._menu_btn("Уведомления")
         self.notes_btn.setObjectName("guide-notes")
         self.notes_btn.clicked.connect(self.notes_requested.emit)
+        self._notes_unread = 0
+        self._notes_pulse = False
+        self._notes_timer = QTimer(self)
+        self._notes_timer.setInterval(800)
+        self._notes_timer.timeout.connect(self._blink_notes)
 
         self.guide_btn = QPushButton("?")
         self.guide_btn.setProperty("circle", True)
@@ -88,9 +82,9 @@ class MenuBar(QFrame):
 
         for widget in (
             self.file_btn,
-            self.view_btn,
             self.undo_btn,
             self.redo_btn,
+            self.journal_btn,
             self.help_btn,
             self.notes_btn,
             self.guide_btn,
@@ -122,18 +116,43 @@ class MenuBar(QFrame):
         self.user_chip.setText(f"Пользователь: {username or '…'}{suffix}")
 
     def set_notes_count(self, unread: int) -> None:
-        self.notes_btn.setText(f"Уведомления ({unread})" if unread else "Уведомления")
+        unread = max(0, int(unread or 0))
+        changed = unread != self._notes_unread
+        self._notes_unread = unread
+        if unread and not self._notes_timer.isActive():
+            self._notes_pulse = True
+            self._notes_timer.start()
+        elif not unread:
+            self._notes_timer.stop()
+            self._notes_pulse = False
+        if changed or not unread:
+            self._paint_notes()
+
+    def _blink_notes(self) -> None:
+        if not self._notes_unread:
+            self._notes_timer.stop()
+            self._notes_pulse = False
+            self._paint_notes()
+            return
+        self._notes_pulse = not self._notes_pulse
+        self._paint_notes()
+
+    def _paint_notes(self) -> None:
+        unread = self._notes_unread
+        alert = unread > 0
+        self.notes_btn.setText(f"Уведомления ({unread}) !" if alert else "Уведомления")
+        self.notes_btn.setToolTip("Есть непрочитанные уведомления" if alert else "")
+        self.notes_btn.setProperty("alert", alert)
+        self.notes_btn.setProperty("pulse", alert and self._notes_pulse)
+        self.notes_btn.style().unpolish(self.notes_btn)
+        self.notes_btn.style().polish(self.notes_btn)
+        self.notes_btn.update()
 
     def set_history_actions(self, can_undo: bool, can_redo: bool, undo_tip: str, redo_tip: str) -> None:
         self.undo_btn.setEnabled(can_undo)
         self.redo_btn.setEnabled(can_redo)
         self.undo_btn.setToolTip(undo_tip)
         self.redo_btn.setToolTip(redo_tip)
-
-    def set_history_prefs(self, open_panel: bool, position: str) -> None:
-        self.history_toggle.setText("Скрыть панель истории" if open_panel else "Показать панель истории")
-        self.hist_right.setText("✓ Справа" if position == "right" else "Справа")
-        self.hist_bottom.setText("✓ Снизу" if position == "bottom" else "Снизу")
 
 
 class TabStrip(QWidget):

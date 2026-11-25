@@ -113,6 +113,30 @@ def test_history_preferences_persist_per_user(client):
     assert other_user.json()["history_position"] == "right"
 
 
+def test_object_list_skips_rows_absent_from_catalog(client):
+    from backend.database import SessionLocal
+    from backend.models import ObjectItem
+
+    session = SessionLocal()
+    try:
+        session.add(
+            ObjectItem(
+                id="legacy-kharanor",
+                name="К-230-12,8 Харанорская ГРЭС ст.4",
+                external_id="legacy-4",
+                station="Харанорская ГРЭС",
+                turbine="К-230-12,8",
+                status="active",
+            )
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    names = [item["name"] for item in client.get("/api/objects").json()]
+    assert names == ["ТЭЦ-1 (ст.3) К-200 (зав.T-101)"]
+
+
 def test_objects_loaded_from_shared_catalog(client):
     response = client.get("/api/objects")
     assert response.status_code == 200
@@ -142,7 +166,7 @@ def test_create_object_does_not_change_catalog_file(client):
     assert response.json()["name"] == "ТЭЦ-2 (ст.5) К-300 (зав.T-202)"
     assert catalog_path.read_text(encoding="utf-8") == original
     names = [item["name"] for item in client.get("/api/objects").json()]
-    assert "ТЭЦ-2 (ст.5) К-300 (зав.T-202)" in names
+    assert "ТЭЦ-2 (ст.5) К-300 (зав.T-202)" not in names
 
 
 def test_default_objects_catalog_is_local_test_folder(monkeypatch):
@@ -397,6 +421,11 @@ def test_sync_selected_triangle_cells(client):
     assert cells[("r011", "s1")]["value"] == "preserve"
     history = client.get(f"/api/workbooks/{workbook_id}/cells/r010/s1/history").json()
     assert "треугольников" in history[0]["comment"]
+    journal = client.get("/api/journal", params={"workbook_id": workbook_id}).json()
+    assert any(
+        item["action"] == "confirmed" and item["parameter_key"] == "r010" and "треугольников" in item["comment"]
+        for item in journal
+    )
 
 
 def test_sync_selected_unmapped_cell_to_chosen_parameter(client):
@@ -477,6 +506,27 @@ def test_sync_triangle_partiality_percentage_to_fraction(client):
     assert cells[("r011", "s1")]["value"] == "0.0356"
 
 
+def test_point_triangle_sync_is_written_to_user_journal(client):
+    objects = client.get("/api/objects").json()
+    workbook_id = client.post("/api/workbooks", json={"object_id": objects[0]["id"]}).json()["id"]
+    stage_label = client.get(f"/api/workbooks/{workbook_id}/catalog").json()["columns"][0]["label"]
+    sheet_id = client.post(f"/api/workbooks/{workbook_id}/sheets", json={"name": "Лист ИД"}).json()["id"]
+    client.post(
+        f"/api/workbooks/{workbook_id}/import-triangle",
+        files={"file": ("triangle.xlsx", _triangle_sync_file(stage_label), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    response = client.post(
+        f"/api/workbooks/{sheet_id}/sync-triangles",
+        json={"mode": "selected", "cells": [{"sheet_key": "geometry", "row": 11, "column": 5}]},
+    )
+    assert response.status_code == 200, response.text
+    journal = client.get("/api/journal", params={"workbook_id": sheet_id}).json()
+    assert any(
+        item["action"] == "confirmed" and item["parameter_key"] == "r010" and "треугольников" in item["comment"]
+        for item in journal
+    )
+
+
 def test_sync_all_triangle_parameters_replaces_mapped_cells(client):
     objects = client.get("/api/objects").json()
     workbook_id = client.post("/api/workbooks", json={"object_id": objects[0]["id"]}).json()["id"]
@@ -507,6 +557,12 @@ def test_sync_all_triangle_parameters_replaces_mapped_cells(client):
     assert cells[("r013", "s1")]["value"] == "1.26"
     assert cells[("r014", "s1")]["value"] == "777"
     assert cells[("r016", "s1")]["value"] == "keep"
+    history = client.get(f"/api/workbooks/{sheet_id}/cells/r011/s1/history").json()
+    assert any("треугольников" in item["comment"] for item in history)
+    journal = client.get("/api/journal", params={"workbook_id": sheet_id}).json()
+    assert any(item["comment"] == "Исходное значение" for item in journal)
+    assert not any(item["action"] == "triangle_sync" for item in journal)
+    assert not any("треугольников" in (item.get("comment") or "") for item in journal)
 
 
 def test_sync_all_uses_requested_triangle_coordinates(client):
@@ -1086,6 +1142,66 @@ def test_objects_list_reads_shared_catalog(client):
     assert response.json()[0]["external_id"] == "101"
 
 
+def _sample_database(tmp_path):
+    import sqlite3
+
+    database = tmp_path / "grand_summary.db"
+    connection = sqlite3.connect(database)
+    connection.execute("CREATE TABLE sample (id INTEGER PRIMARY KEY, note TEXT)")
+    connection.execute("INSERT INTO sample (note) VALUES ('снимок')")
+    connection.commit()
+    connection.close()
+    return database
+
+
+def test_tiered_database_backups_match_task_tracker(tmp_path, monkeypatch):
+    import sqlite3
+    from datetime import datetime
+
+    from src.services.db_backup import (
+        daily_backup_dir,
+        list_snapshot_dirs,
+        monthly_backup_dir,
+        rotate_tiered_backups,
+        verify_snapshot,
+        weekly_backup_dir,
+        write_current_snapshot,
+    )
+
+    database = _sample_database(tmp_path)
+    monkeypatch.setenv("GRAND_SUMMARY_DB", str(database))
+
+    first = rotate_tiered_backups(datetime(2026, 3, 1, 8, 0, 0))
+    assert [item.parent.name for item in first] == ["дневные", "недельные", "месячные"]
+    daily = daily_backup_dir(database) / "2026.03.01" / "grand_summary.db"
+    saved = sqlite3.connect(daily)
+    assert saved.execute("SELECT note FROM sample").fetchone()[0] == "снимок"
+    saved.close()
+    verify_snapshot(daily.parent)
+    assert rotate_tiered_backups(datetime(2026, 3, 1, 21, 0, 0)) == []
+
+    for day in range(2, 9):
+        rotate_tiered_backups(datetime(2026, 3, day, 9, 0, 0))
+    daily_names = [row.name for row in list_snapshot_dirs(daily_backup_dir(database))]
+    assert daily_names == ["2026.03.08", "2026.03.07", "2026.03.06", "2026.03.05", "2026.03.04"]
+    assert [row.name for row in list_snapshot_dirs(weekly_backup_dir(database))] == ["2026.03.08", "2026.03.01"]
+    assert [row.name for row in list_snapshot_dirs(monthly_backup_dir(database))] == ["2026.03.01"]
+
+    for index in range(8):
+        write_current_snapshot(datetime(2026, 9, 10, 12, 0, index))
+    current = list_snapshot_dirs(database.parent / "бекап")
+    assert len(current) == 5
+    assert current[0].name.startswith("2026.09.10_12-00-")
+
+
+def test_database_backup_skips_postgres(monkeypatch):
+    from src.services.db_backup import rotate_tiered_backups, write_current_snapshot
+
+    monkeypatch.setenv("GRAND_SUMMARY_DB", "postgresql://u:p@localhost/grand")
+    assert rotate_tiered_backups() == []
+    assert write_current_snapshot() is None
+
+
 def test_database_url_postgres(monkeypatch):
     monkeypatch.setenv("GRAND_SUMMARY_DB", "postgresql://u:p@localhost/grand")
     from backend.database import _database_url
@@ -1634,6 +1750,9 @@ def test_save_project_preserves_sheet_and_draft_status(client):
 
     journal = client.get("/api/journal", params={"workbook_id": workbook_id}).json()
     assert any(item["action"] == "project_saved" for item in journal)
+    from src.services.db_backup import backup_dir, list_snapshot_dirs
+
+    assert len(list_snapshot_dirs(backup_dir())) == 1
 
 
 def test_report_preview_uses_selected_sheet(client):

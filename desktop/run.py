@@ -98,7 +98,7 @@ def main() -> None:
 
         local_data = local_app_root() / "data"
         os.environ["GRAND_SUMMARY_DESKTOP"] = "1"
-        os.environ.setdefault("GRAND_SUMMARY_DATA_DIR", str(_ROOT / "data"))
+        os.environ.setdefault("GRAND_SUMMARY_DATA_DIR", str(local_data))
         os.environ.setdefault(
             "GRAND_SUMMARY_USER_PREFERENCES", str(local_data / "user_preferences.json")
         )

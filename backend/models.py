@@ -104,6 +104,7 @@ class CellChange(Base):
     old_value: Mapped[str | None] = mapped_column(Text, nullable=True)
     new_value: Mapped[str | None] = mapped_column(Text, nullable=True)
     comment: Mapped[str] = mapped_column(Text, nullable=False)
+    user_journal: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
     cell: Mapped[Cell] = relationship(back_populates="changes")
 

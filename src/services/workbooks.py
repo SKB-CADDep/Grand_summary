@@ -797,6 +797,7 @@ def copy_cell_changes(session: Session, source: Cell, target: Cell) -> None:
                 old_value=change.old_value,
                 new_value=change.new_value,
                 comment=change.comment,
+                user_journal=change.user_journal,
             )
         )
 
@@ -813,6 +814,7 @@ def confirm_cell(
     expected_updated_at: str | None = None,
     system: bool = False,
     existing_cell: Cell | None = None,
+    user_journal: bool = True,
 ) -> Cell:
     comment = (comment or "").strip()
     if not comment:
@@ -838,6 +840,7 @@ def confirm_cell(
         old_value=old_value,
         new_value=new_value,
         comment=comment,
+        user_journal=user_journal,
     )
     updates = {
         "value": new_value,
@@ -1365,7 +1368,14 @@ def apply_imported_values(
     return count
 
 
-def apply_rules(session: Session, workbook: Workbook, parameter_key: str, column_key: str, username: str) -> None:
+def apply_rules(
+    session: Session,
+    workbook: Workbook,
+    parameter_key: str,
+    column_key: str,
+    username: str,
+    user_journal: bool = True,
+) -> None:
     source = get_or_create_cell(session, workbook, parameter_key, column_key)
     value = _display(source) or source.value
     matched = matching_rules(parameter_key, value)
@@ -1387,6 +1397,7 @@ def apply_rules(session: Session, workbook: Workbook, parameter_key: str, column
                     comment=f"Автоматически по правилу «{rule.get('id')}»",
                     value=copied,
                     system=True,
+                    user_journal=user_journal,
                 )
                 dst = get_or_create_cell(session, workbook, item["to"], column_key)
             dst.locked = True

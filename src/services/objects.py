@@ -59,14 +59,8 @@ def _local_object(session: Session, record: dict[str, Any]) -> ObjectItem:
 def list_objects(session: Session) -> list[ObjectItem]:
     catalog = read_object_catalog()
     items = [_local_object(session, record) for record in catalog]
-    catalog_ids = {_text(record.get("ID_projects")) for record in catalog}
-    extras = [
-        item
-        for item in session.query(ObjectItem).all()
-        if _text(item.external_id) and _text(item.external_id) not in catalog_ids
-    ]
     session.flush()
-    return sorted([*items, *extras], key=lambda item: item.name.casefold())
+    return sorted(items, key=lambda item: item.name.casefold())
 
 
 def get_object(session: Session, object_id: str) -> ObjectItem | None:

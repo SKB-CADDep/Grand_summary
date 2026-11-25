@@ -13,7 +13,7 @@
   },
   "nadya": {
     "history_position": "right",
-    "history_panel_open": true,
+    "history_panel_open": false,
     "history_right_width": 360,
     "history_bottom_height": 260
   }

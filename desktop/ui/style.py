@@ -36,6 +36,17 @@ QPushButton[flatMenu="true"] {
 }
 QPushButton[flatMenu="true"]:hover { background: #f3f7fc; }
 QPushButton[flatMenu="true"]:checked { background: #f3f7fc; }
+QPushButton[flatMenu="true"][alert="true"] {
+  color: #b42318;
+  font-weight: 700;
+}
+QPushButton[flatMenu="true"][alert="true"][pulse="true"] {
+  background: #fdecea;
+}
+QPushButton[flatMenu="true"][alert="true"]:hover {
+  color: #b42318;
+  background: #f8d5d2;
+}
 QWidget#tab-host {
   background: transparent;
 }

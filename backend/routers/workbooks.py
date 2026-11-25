@@ -197,6 +197,12 @@ def save_project(
     )
     saved_at = datetime.now(timezone.utc).isoformat()
     session.commit()
+    try:
+        from src.services.db_backup import write_current_snapshot
+
+        write_current_snapshot()
+    except Exception:
+        pass
     return {
         "saved_at": saved_at,
         "sheet_count": len(sheets),

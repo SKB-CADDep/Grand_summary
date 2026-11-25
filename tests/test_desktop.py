@@ -497,6 +497,163 @@ def test_material_cell_editor_filters_typed_text(monkeypatch):
     app.processEvents()
 
 
+def test_unread_notes_highlight_the_button(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    from desktop.ui.chrome import MenuBar
+
+    bar = MenuBar()
+    bar.set_notes_count(0)
+    assert bar.notes_btn.text() == "Уведомления"
+    assert bar.notes_btn.property("alert") is False
+    assert bar._notes_timer.isActive() is False
+
+    bar.set_notes_count(2)
+    assert bar.notes_btn.text() == "Уведомления (2) !"
+    assert bar.notes_btn.property("alert") is True
+    assert bar._notes_timer.isActive() is True
+    pulsing = bar.notes_btn.property("pulse")
+    bar._blink_notes()
+    assert bar.notes_btn.property("alert") is True
+    assert bar.notes_btn.property("pulse") is not pulsing
+    assert "!" in bar.notes_btn.text()
+
+    bar.set_notes_count(0)
+    assert bar.notes_btn.text() == "Уведомления"
+    assert bar.notes_btn.property("alert") is False
+    assert bar.notes_btn.property("pulse") is False
+    assert bar._notes_timer.isActive() is False
+    app.processEvents()
+
+
+def test_user_journal_is_its_own_menu_button(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication, QPushButton
+
+    app = QApplication.instance() or QApplication([])
+    from desktop.ui.chrome import MenuBar
+
+    bar = MenuBar()
+    help_labels = [action.text() for action in bar.help_btn.menu().actions()]
+    assert "Журнал изменений пользователей" not in help_labels
+    journal = next(
+        button for button in bar.findChildren(QPushButton) if button.text() == "Журнал изменений пользователей"
+    )
+    opened: list[bool] = []
+    bar.journal_requested.connect(lambda: opened.append(True))
+    journal.click()
+    assert opened == [True]
+    app.processEvents()
+
+
+def test_history_presentation_opens_from_the_history_panel(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication, QPushButton
+
+    app = QApplication.instance() or QApplication([])
+    from desktop.ui.chrome import MenuBar
+    from desktop.ui.table_page import TablePage
+
+    bar = MenuBar()
+    assert all(button.text() != "Представление" for button in bar.findChildren(QPushButton))
+    page = TablePage()
+    page.set_history_layout("bottom", True, {"right": 360, "bottom": 260})
+    menu = page._history_context_menu()
+    labels = [action.text() for action in menu.actions()]
+    assert "Скрыть историю" in labels
+    assert "Справа" in labels
+    assert "✓ Снизу" in labels
+    chosen: list[str] = []
+    page.history_position_requested.connect(chosen.append)
+    next(action for action in menu.actions() if action.text() == "Справа").trigger()
+    assert chosen == ["right"]
+    app.processEvents()
+
+
+def test_table_guide_button_is_available_only_on_the_id_table(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication, QPushButton
+
+    app = QApplication.instance() or QApplication([])
+    from desktop.ui.dialogs import GuideChoiceDialog
+
+    locked = GuideChoiceDialog(table_ready=False)
+    locked_table = next(button for button in locked.findChildren(QPushButton) if "таблиц" in button.text().casefold())
+    assert locked_table.isEnabled() is False
+    assert "Таблица ИД" in locked_table.toolTip()
+    ready = GuideChoiceDialog(table_ready=True)
+    ready_table = next(button for button in ready.findChildren(QPushButton) if "таблиц" in button.text().casefold())
+    assert ready_table.isEnabled() is True
+    app.processEvents()
+
+
+def test_guide_spotlight_keeps_the_target_visible(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtCore import QPoint
+    from PyQt6.QtWidgets import QApplication, QPushButton, QWidget
+
+    app = QApplication.instance() or QApplication([])
+    from desktop.ui.dialogs import GuideOverlay
+
+    host = QWidget()
+    host.resize(900, 600)
+    target = QPushButton("Объект", host)
+    target.setObjectName("guide-object")
+    target.setStyleSheet("background: #ffffff; color: #263238; border: none;")
+    target.setGeometry(40, 80, 220, 36)
+    bar = QWidget(host)
+    bar.setObjectName("guide-menu")
+    bar.setGeometry(0, 0, 900, 40)
+    host.show()
+    overlay = GuideOverlay(
+        [
+            {
+                "title": "Объект",
+                "points": ["Начните вводить название", "В списке останутся подходящие объекты"],
+                "target": "guide-object",
+            },
+            {
+                "title": "Меню",
+                "points": ["Файл обновляет окно", "Справка открывает инструкцию"],
+                "target": "guide-menu",
+            },
+        ],
+        host,
+        None,
+    )
+    overlay.show()
+    host.move(160, 90)
+    app.processEvents()
+    overlay._place()
+    origin = overlay.mapFromGlobal(target.mapToGlobal(QPoint(0, 0)))
+    assert overlay._hole.topLeft() == origin
+    center = origin + QPoint(target.width() // 2, target.height() // 2)
+    assert overlay._hole.contains(center)
+    assert not overlay.card.geometry().intersects(overlay._hole)
+    assert not overlay.mask().contains(center)
+    texts = [label.text() for label in overlay.findChildren(type(overlay.title))]
+    assert "Начните вводить название" in texts
+    assert "В списке останутся подходящие объекты" in texts
+    assert "Начните вводить название. В списке" not in " ".join(texts)
+    image = host.grab().toImage()
+    sample = origin + QPoint(8, 6)
+    field = image.pixelColor(sample.x(), sample.y())
+    shade = image.pixelColor(12, 120)
+    assert field.lightness() > 200
+    assert shade.lightness() < field.lightness()
+    overlay._next()
+    app.processEvents()
+    bar_origin = overlay.mapFromGlobal(bar.mapToGlobal(QPoint(0, 0)))
+    bar_center = bar_origin + QPoint(bar.width() // 2, bar.height() // 2)
+    assert overlay._hole.topLeft() == bar_origin
+    assert overlay._hole.contains(bar_center)
+    assert not overlay.card.geometry().contains(bar_center)
+    overlay.close()
+    host.close()
+
+
 def test_id_table_link_cell_uses_pointing_hand(monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     from PyQt6.QtCore import QEvent, Qt

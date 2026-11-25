@@ -105,7 +105,7 @@ def list_user_journal(session: Session, workbook_id: str | None = None) -> list[
     changes = session.query(CellChange).all()
     for change in changes:
         cell: Cell | None = change.cell
-        if cell is None:
+        if cell is None or change.user_journal is False:
             continue
         workbook = cell.workbook
         if workbook_id and workbook and workbook.id != workbook_id:

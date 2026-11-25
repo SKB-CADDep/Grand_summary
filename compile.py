@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Сборка окна «Гранд сводка ИД» в папку dist/GrandSummary/."""
+"""Сборка лаунчера dist/GrandSummary.exe и одного exe релиза в dist/releases/."""
 from __future__ import annotations
 
 import shutil
@@ -98,7 +98,7 @@ def main() -> None:
         "--noconfirm",
         "--clean",
         "--windowed",
-        "--onedir",
+        "--onefile",
         "--name",
         NAME,
         "--paths",
@@ -114,29 +114,59 @@ def main() -> None:
         "--add-data",
         f"{PROJECT / 'data' / 'acl.json'}{SEP}data",
         "--collect-all",
-        "PyQt6",
-        "--exclude-module",
-        "PyQt6.QtWebEngineCore",
-        "--exclude-module",
-        "PyQt6.QtWebEngineWidgets",
-        "--exclude-module",
-        "PyQt6.QtWebEngineQuick",
-        "--exclude-module",
-        "PyQt6.QtWebEngine",
-        "--collect-all",
         "docx",
     ]
+    # Весь PyQt6 — это Qt3D, QML, видео и дизайнер (~190 МБ). Окну нужны Core, Gui и Widgets;
+    # их подтянет анализ импортов вместе с плагинами окна, стиля и PNG.
+    for name in (
+        "PyQt6.QtWebEngineCore",
+        "PyQt6.QtWebEngineWidgets",
+        "PyQt6.QtWebEngineQuick",
+        "PyQt6.QtWebEngine",
+        "PyQt6.QtQuick",
+        "PyQt6.QtQuick3D",
+        "PyQt6.QtQuickWidgets",
+        "PyQt6.QtQml",
+        "PyQt6.QtMultimedia",
+        "PyQt6.QtMultimediaWidgets",
+        "PyQt6.Qt3DCore",
+        "PyQt6.Qt3DRender",
+        "PyQt6.Qt3DExtras",
+        "PyQt6.Qt3DAnimation",
+        "PyQt6.Qt3DInput",
+        "PyQt6.Qt3DLogic",
+        "PyQt6.QtCharts",
+        "PyQt6.QtDataVisualization",
+        "PyQt6.QtPdf",
+        "PyQt6.QtPdfWidgets",
+        "PyQt6.QtDesigner",
+        "PyQt6.QtHelp",
+        "PyQt6.QtBluetooth",
+        "PyQt6.QtNfc",
+        "PyQt6.QtPositioning",
+        "PyQt6.QtSensors",
+        "PyQt6.QtSerialPort",
+        "PyQt6.QtSql",
+        "PyQt6.QtTest",
+        "PyQt6.QtTextToSpeech",
+        "PyQt6.QtRemoteObjects",
+        "PyQt6.QtWebChannel",
+        "PyQt6.QtWebSockets",
+        "PyQt6.QtSpatialAudio",
+        "pytest",
+    ):
+        cmd.extend(["--exclude-module", name])
     for name in HIDDEN:
         cmd.extend(["--hidden-import", name])
     cmd.append(str(ENTRY))
     run(cmd)
 
-    app_bundle = app_output / NAME
-    if not (app_bundle / f"{NAME}.exe").is_file():
-        raise SystemExit(f"Нет {app_bundle / f'{NAME}.exe'}")
+    exe = app_output / f"{NAME}.exe"
+    if not exe.is_file():
+        raise SystemExit(f"Нет {exe}")
     release_bundle = DIST / "releases" / APP_VERSION / APP_NAME
-    release_bundle.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(app_bundle, release_bundle)
+    release_bundle.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(exe, release_bundle / exe.name)
 
     launcher_cmd = [
         sys.executable,
@@ -161,8 +191,8 @@ def main() -> None:
     if not launcher.is_file():
         raise SystemExit(f"Нет {launcher}")
     write_manifest(DIST, APP_VERSION)
-    print(f"[compile] релиз {APP_VERSION}: {release_bundle}")
     print(f"[compile] лаунчер: {launcher}")
+    print(f"[compile] релиз {APP_VERSION}: {release_bundle / exe.name}")
     print("[compile] dist готов; на шару обновлений автоматически не копировалось.")
 
 
