@@ -6,6 +6,30 @@ import threading
 from pathlib import Path
 
 WINDOW_TITLE = "Гранд сводка ИД"
+
+
+class _NullStream:
+    """Поток без консоли. На Windows файл nul сам отвечает isatty() == True."""
+
+    def write(self, text: str = "") -> int:
+        return len(text or "")
+
+    def flush(self) -> None:
+        return None
+
+    def isatty(self) -> bool:
+        return False
+
+
+def ensure_windowed_stdio() -> None:
+    """В exe без консоли stdout/stderr равны None, и uvicorn падает на isatty()."""
+    if sys.stdout is None:
+        sys.stdout = _NullStream()
+    if sys.stderr is None:
+        sys.stderr = _NullStream()
+
+
+ensure_windowed_stdio()
 _ROOT = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
 _SHUTDOWN_REQUESTED = threading.Event()
 
