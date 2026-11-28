@@ -1,0 +1,14 @@
+{
+  "kind": "daily",
+  "created_at": "2026-11-28T19:15:33",
+  "files": {
+    "grand_summary.db": {
+      "sha256": "ae35fd076347ef6b82db0e68bdd63583bfec08f17dedecbd75e6a90f1b39ca14",
+      "size": 9371648
+    },
+    "grand_summary.json": {
+      "sha256": "4ccd1764f614fe2df2dd7fd10d8db09f18854a49b029c00e38e1d42c825d82a3",
+      "size": 12024266
+    }
+  }
+}

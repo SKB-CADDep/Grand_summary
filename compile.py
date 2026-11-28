@@ -7,7 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from src.app_info import APP_NAME, APP_VERSION, LAUNCHER_EXE_NAME
+from src.app_info import APP_VERSION, LAUNCHER_EXE_NAME
 from src.services.updates import write_manifest
 
 PROJECT = Path(__file__).resolve().parent
@@ -164,7 +164,7 @@ def main() -> None:
     exe = app_output / f"{NAME}.exe"
     if not exe.is_file():
         raise SystemExit(f"Нет {exe}")
-    release_bundle = DIST / "releases" / APP_VERSION / APP_NAME
+    release_bundle = DIST / "releases" / APP_VERSION
     release_bundle.mkdir(parents=True, exist_ok=True)
     shutil.copy2(exe, release_bundle / exe.name)
 

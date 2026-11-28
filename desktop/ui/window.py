@@ -29,11 +29,13 @@ from desktop.ui.dialogs import (
     GuideOverlay,
     InstructionDialog,
     JournalDialog,
+    NotificationSettingsDialog,
     NotificationsDialog,
     UnsavedDialog,
 )
 from desktop.ui.object_page import ObjectPage
 from desktop.ui.report_page import ReportPage
+from desktop.ui.compare_window import SheetCompareWindow
 from desktop.ui.table_page import TablePage
 from desktop.ui.triangle_page import TrianglePage
 
@@ -98,6 +100,8 @@ APP_TOUR = [
         "title": "Отчёт",
         "lead": "Эта вкладка собирает документ Word по текущей сводке.",
         "points": [
+            "Отчёт строится по основной таблице: от начала работы или от последней выданной версии.",
+            "«Выдать версию» фиксирует текущий срез отдельным листом и сбрасывает подсветку в основной таблице.",
             "Можно выгрузить короткую служебку или полную сводку.",
             "В файл попадают значения и ссылки на чертежи.",
             "Комментарии к ячейкам в Word не выводятся.",
@@ -157,9 +161,11 @@ TABLE_TOUR = [
         "title": "Листы",
         "lead": "Полоса вкладок — версии одной сводки.",
         "points": [
-            "Каждая вкладка — отдельный лист: исходный, копия или выданная версия.",
-            "Правый клик по вкладке: переименовать, копировать, удалить или сделать основным.",
-            "Лист с пометкой «версия выдана» и основной лист открываются только для просмотра.",
+            "Основная таблица — рабочий срез. Рядом могут быть база и выданные версии.",
+            "Выданный лист появляется только после кнопки «Выдать версию» во вкладке «Отчёт» или при загрузке Excel.",
+            "Правый клик по вкладке: переименовать, удалить выданный лист или назначить базовым.",
+            "Базовый лист и выданная версия открываются только для просмотра. Работа идёт в основной таблице.",
+            "После загрузки нескольких листов Excel оранжевые ячейки видны только в основной таблице. Подсветку можно скрыть правым кликом по вкладке.",
         ],
         "target": "guide-sheet",
         "tab": "table",
@@ -184,7 +190,7 @@ TABLE_TOUR = [
             "Можно поправить наименование, единицу измерения и уровень вложенности.",
             "«Добавить» создаёт строку, «Добавить вложенный» — строку внутри группы, «Удалить» убирает выбранную.",
             "Там же переименовываются и добавляются столбцы шапки.",
-            "На основном и выданном листе кнопка скрыта: такой лист только для просмотра.",
+            "На базовом и выданном листе кнопка скрыта: такой лист только для просмотра.",
         ],
         "target": "guide-add-param",
         "tab": "table",
@@ -219,6 +225,7 @@ class MainWindow(QMainWindow):
         self.history_panel_open = True
         self.history_sizes = {"right": 360, "bottom": 260}
         self.guide_overlay: GuideOverlay | None = None
+        self._compare_windows: list[SheetCompareWindow] = []
 
         self.object_page = ObjectPage()
         self.triangle_page = TrianglePage()
@@ -298,6 +305,7 @@ class MainWindow(QMainWindow):
 
     def _connect_pages(self) -> None:
         self.object_page.object_selected.connect(self.select_object)
+        self.object_page.object_open_table_requested.connect(self.open_object_table)
         self.object_page.import_parameters_requested.connect(self._import_workbook)
         self.object_page.import_triangle_requested.connect(self._import_triangle)
         self.triangle_page.catalog_needed.connect(self._triangle_catalog)
@@ -315,6 +323,9 @@ class MainWindow(QMainWindow):
         self.table_page.sheet_ordinary_requested.connect(self.unset_primary_sheet)
         self.table_page.sheet_delete_requested.connect(self.delete_sheet)
         self.table_page.sheet_issued_requested.connect(self.set_sheet_issued)
+        self.table_page.sheet_base_requested.connect(self.set_base_sheet)
+        self.table_page.sheet_change_highlight_requested.connect(self.set_change_highlight)
+        self.table_page.sheet_compare_requested.connect(self._open_sheet_compare)
         self.table_page.draft_requested.connect(self._draft)
         self.table_page.confirm_requested.connect(self._confirm)
         self.table_page.discard_requested.connect(self._discard)
@@ -333,6 +344,9 @@ class MainWindow(QMainWindow):
         self.table_page.history_position_requested.connect(self._set_history_position)
         self.report_page.preview_requested.connect(self._load_report_sheet)
         self.report_page.export_requested.connect(self._export_report)
+        self.report_page.issue_version_requested.connect(self.issue_version)
+        self.report_page.note_add_requested.connect(self._add_report_note)
+        self.report_page.note_delete_requested.connect(self._delete_report_note)
 
     def _set_busy(self, busy: bool) -> None:
         was = self.busy
@@ -400,7 +414,11 @@ class MainWindow(QMainWindow):
         self.report_page.set_sheets(self.sheets, (self.workbook or {}).get("id"))
         if self.workbook and self.catalog:
             self.report_page.set_table_data(
-                self.catalog, self.workbook.get("cells") or [], self.busy, self.workbook.get("id")
+                self.catalog,
+                self.workbook.get("cells") or [],
+                self.busy,
+                self.workbook.get("id"),
+                self.workbook.get("report_notes") or [],
             )
         self._refresh_history_actions()
 
@@ -415,6 +433,14 @@ class MainWindow(QMainWindow):
         if not self.workbook:
             return None
         return self.workbook.get("parent_workbook_id") or self.workbook.get("id")
+
+    def open_object_table(self, object_id: str) -> None:
+        if not object_id:
+            return
+        self.select_object(object_id)
+        if self.selected_id == object_id and self.workbook:
+            self.tab = "table"
+            self._refresh_pages()
 
     def select_object(self, object_id: str) -> None:
         self.selected_id = object_id
@@ -536,17 +562,85 @@ class MainWindow(QMainWindow):
         finally:
             self._set_busy(False)
 
-    def set_sheet_issued(self, sheet_id: str) -> None:
+    def set_base_sheet(self, sheet_id: str) -> None:
         source = next((item for item in self.sheets if item.get("id") == sheet_id), None)
-        issued = not bool((source or {}).get("is_issued"))
+        name = (source or {}).get("name") or "лист"
+        if QMessageBox.question(
+            self,
+            "Базовый лист",
+            f"Снять базовый срез с «{name}»? Появится лист «База (дата)», он зафиксируется и больше не изменится. Основная таблица останется рабочей.",
+        ) != QMessageBox.StandardButton.Yes:
+            return
         self._set_busy(True)
         try:
-            result = self.client.set_sheet_issued(self._root_id() or sheet_id, sheet_id, issued)
+            result = self.client.set_base_sheet(self._root_id() or sheet_id, sheet_id)
+            self.sheets = result.get("sheets") or self.sheets
+            self._load_sheet_tree(self._root_id() or sheet_id, result.get("active_sheet_id") or sheet_id)
+            assigned = next((item for item in self.sheets if item.get("is_base")), None)
+            self._info(f"Лист «{(assigned or {}).get('name') or name}» назначен базовым.")
+        except Exception as exc:
+            self._fail(exc)
+        finally:
+            self._set_busy(False)
+
+    def set_change_highlight(self, sheet_id: str, enabled: bool) -> None:
+        self._set_busy(True)
+        try:
+            result = self.client.set_change_highlight(self._root_id() or sheet_id, sheet_id, enabled)
+            self.sheets = result.get("sheets") or self.sheets
+            self._load_sheet_tree(self._root_id() or sheet_id, result.get("active_sheet_id") or sheet_id)
+            if enabled:
+                self._info("Подсветка изменённых ячеек включена.")
+            else:
+                self._info("Подсветка изменённых ячеек скрыта.")
+        except Exception as exc:
+            self._fail(exc)
+        finally:
+            self._set_busy(False)
+
+    def issue_version(self) -> None:
+        if not self.workbook:
+            return
+        if self.unsaved:
+            self._fail(Exception("Сначала сохраните или отмените черновики основной таблицы."))
+            return
+        from desktop.ui.dialogs import choose_issued_kind
+        from src.issued_kinds import issued_kind_label
+
+        kind = choose_issued_kind(
+            self,
+            "Выдать версию",
+            "Зафиксировать текущую основную таблицу как выданный лист? Подсветка в основной таблице сбросится, история в ячейках сохранится.",
+        )
+        if not kind:
+            return
+        self._set_busy(True)
+        try:
+            result = self.client.issue_version(self._root_id() or self.workbook["id"], kind)
+            self.sheets = result.get("sheets") or self.sheets
+            issued_id = result.get("issued_sheet_id") or result.get("active_sheet_id")
+            self._load_sheet_tree(self._root_id() or self.workbook["id"], issued_id)
+            issued = next((item for item in self.sheets if item.get("id") == issued_id), None)
+            self._info(
+                f"Выдан лист «{(issued or {}).get('name') or issued_id}» ({issued_kind_label(kind)})."
+            )
+        except Exception as exc:
+            self._fail(exc)
+        finally:
+            self._set_busy(False)
+
+    def set_sheet_issued(self, sheet_id: str, issued: bool, kind: str = "") -> None:
+        source = next((item for item in self.sheets if item.get("id") == sheet_id), None)
+        self._set_busy(True)
+        try:
+            result = self.client.set_sheet_issued(self._root_id() or sheet_id, sheet_id, issued, kind)
             self.sheets = result.get("sheets") or self.sheets
             self._load_sheet_tree(self._root_id() or sheet_id, result.get("active_sheet_id") or sheet_id)
             name = (source or {}).get("name") or ""
             if issued:
-                self._info(f"Лист «{name}» отмечен как выданная версия.")
+                from src.issued_kinds import issued_kind_label
+
+                self._info(f"Лист «{name}» отмечен как выданная версия ({issued_kind_label(kind)}).")
             else:
                 self._info(f"С листа «{name}» снята отметка выданной версии.")
         except Exception as exc:
@@ -705,19 +799,54 @@ class MainWindow(QMainWindow):
     def _compose_report(self) -> None:
         if not self._remind_drafts():
             return
+        main = next(
+            (item for item in self.sheets if item.get("is_primary") and not item.get("is_base")),
+            self.workbook,
+        )
+        main_id = (main or {}).get("id")
+        if main_id and (not self.workbook or self.workbook.get("id") != main_id):
+            try:
+                self._load_sheet_tree(self._root_id() or main_id, main_id)
+            except Exception as exc:
+                self._fail(exc)
+                return
         self.report_page.use_custom_report()
         self.tab = "report"
         self._refresh_pages()
         if self.workbook and self.catalog:
             self.report_page.set_table_data(
-                self.catalog, self.workbook.get("cells") or [], sheet_id=self.workbook.get("id")
+                self.catalog,
+                self.workbook.get("cells") or [],
+                sheet_id=self.workbook.get("id"),
+                notes=self.workbook.get("report_notes") or [],
             )
 
     def _load_report_sheet(self, sheet_id: str, _type: str) -> None:
         try:
             book = self.client.workbook(sheet_id)
             catalog = self.client.catalog(sheet_id)
-            self.report_page.set_table_data(catalog, book.get("cells") or [], sheet_id=sheet_id)
+            self.report_page.set_table_data(
+                catalog, book.get("cells") or [], sheet_id=sheet_id, notes=book.get("report_notes") or []
+            )
+        except Exception as exc:
+            self._fail(exc)
+
+    def _apply_report_notes(self, sheet_id: str, notes: list) -> None:
+        if self.workbook and self.workbook.get("id") == sheet_id:
+            self.workbook["report_notes"] = notes
+        self.report_page.set_notes(notes)
+
+    def _add_report_note(self, sheet_id: str, parameter_key: str, column_key: str, text: str) -> None:
+        try:
+            notes = self.client.add_report_note(sheet_id, parameter_key, column_key, text)
+            self._apply_report_notes(sheet_id, notes)
+        except Exception as exc:
+            self._fail(exc)
+
+    def _delete_report_note(self, sheet_id: str, note_id: str) -> None:
+        try:
+            notes = self.client.delete_report_note(sheet_id, note_id)
+            self._apply_report_notes(sheet_id, notes)
         except Exception as exc:
             self._fail(exc)
 
@@ -848,6 +977,26 @@ class MainWindow(QMainWindow):
             self.table_page.set_history(self.client.history(self.workbook["id"], parameter_key, column_key))
         except Exception as exc:
             self._fail(exc)
+
+    def _open_sheet_compare(self, sheet_id: str) -> None:
+        source = next((item for item in self.sheets if item.get("id") == sheet_id), None)
+        if source is None:
+            return
+        window = SheetCompareWindow(
+            self.client,
+            sheet_id,
+            source.get("name") or "Лист",
+            self.sheets,
+            self,
+        )
+        window.destroyed.connect(lambda *_args, win=window: self._forget_compare_window(win))
+        self._compare_windows.append(window)
+        window.show()
+        window.raise_()
+        window.activateWindow()
+
+    def _forget_compare_window(self, window: SheetCompareWindow) -> None:
+        self._compare_windows = [item for item in self._compare_windows if item is not window]
 
     def _after_structure(self, previous: dict, previous_catalog: dict | None, label: str) -> None:
         if not self.workbook:
@@ -1331,6 +1480,7 @@ class MainWindow(QMainWindow):
 
     def _show_notes(self) -> None:
         dialog = NotificationsDialog(self.notes, self)
+        dialog.settings_requested.connect(self._show_notification_settings)
         dialog.exec()
         for note_id in dialog.selected_ids:
             try:
@@ -1342,6 +1492,20 @@ class MainWindow(QMainWindow):
             self.chrome.set_notes_count(sum(1 for item in self.notes if not item.get("read")))
         except Exception:
             pass
+
+    def _show_notification_settings(self) -> None:
+        try:
+            settings = self.client.notification_settings()
+        except Exception as exc:
+            self._fail(exc)
+            return
+        dialog = NotificationSettingsDialog(settings, self)
+        if not dialog.exec():
+            return
+        try:
+            self.client.save_notification_settings(dialog.payload())
+        except Exception as exc:
+            self._fail(exc)
 
     def _about(self) -> None:
         try:

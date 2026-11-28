@@ -13,6 +13,9 @@ router = APIRouter(tags=["Objects"])
 
 def _to_out(session: Session, item) -> ObjectOut:
     workbook = object_service.workbook_for_object(session, item.id)
+    sheet_count = 0
+    if workbook is not None:
+        sheet_count = 1 + len(list(workbook.sheets))
     return ObjectOut(
         id=item.id,
         name=item.name,
@@ -23,6 +26,10 @@ def _to_out(session: Session, item) -> ObjectOut:
         status=item.status,
         has_workbook=workbook is not None,
         workbook_id=workbook.id if workbook else None,
+        workbook_updated_at=workbook.updated_at if workbook else None,
+        last_edited_by=object_service.last_editor_for_workbook(session, workbook) if workbook else None,
+        started_by=workbook.created_by if workbook else None,
+        sheet_count=sheet_count,
     )
 
 

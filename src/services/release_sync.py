@@ -123,7 +123,7 @@ def release_exe(
     releases_subdir: str = "releases",
 ) -> Path | None:
     folder = Path(root) / releases_subdir / version
-    for path in (folder / exe_name, folder / APP_NAME / exe_name):
+    for path in (folder / exe_name,):
         if path.is_file():
             return path
     return None
@@ -193,7 +193,7 @@ def copy_release_version(
         shutil.copy2(path, target)
         done += path.stat().st_size
         report(f"Копирование {version}… ({int(done * 100 / total)}%)", done, total)
-    if not ((temporary / exe_name).is_file() or (temporary / APP_NAME / exe_name).is_file()):
+    if not (temporary / exe_name).is_file():
         shutil.rmtree(temporary, ignore_errors=True)
         raise FileNotFoundError(f"В релизе нет {exe_name}:\n{source}")
     if destination.exists():

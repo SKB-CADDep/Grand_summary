@@ -11,7 +11,7 @@ def _touch(path: Path, payload: bytes = b"exe") -> None:
 def test_launcher_copies_the_newer_release_from_the_share(tmp_path: Path):
     share = tmp_path / "share"
     local = tmp_path / "local"
-    _touch(share / "releases" / "0.0.1" / "GrandSummary" / "GrandSummary.exe", b"old")
+    _touch(share / "releases" / "0.0.1" / "GrandSummary.exe", b"old")
     _touch(share / "releases" / "0.0.2" / "GrandSummary.exe", b"new")
     write_manifest(share, "0.0.1")
     _touch(local / "releases" / "0.0.1" / "GrandSummary.exe", b"old")

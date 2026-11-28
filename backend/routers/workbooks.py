@@ -19,15 +19,22 @@ from backend.schemas import (
     AddStageRequest,
     CatalogResponse,
     CellChangeOut,
+    CellCompareOut,
+    CellCompareRequest,
     CellCommentRequest,
+    SheetCompareOut,
     CellConfirmRequest,
     CellDraftRequest,
     CellOut,
     CellUnificationRequest,
     ReportCreateRequest,
+    ReportNoteCreateRequest,
+    ReportNoteOut,
     ReportTableExportRequest,
     SessionRestoreRequest,
+    SheetChangeHighlightRequest,
     SheetCreateRequest,
+    IssueVersionRequest,
     SheetIssuedRequest,
     SheetRenameRequest,
     TriangleSyncRequest,
@@ -57,8 +64,8 @@ def _workbook_or_404(session: Session, workbook_id: str):
 
 
 def _require_ordinary_sheet(workbook: Workbook) -> None:
-    if workbook.is_primary:
-        raise HTTPException(status_code=400, detail="Основной лист доступен только для просмотра")
+    if workbook.is_base:
+        raise HTTPException(status_code=400, detail="Базовый лист доступен только для просмотра")
 
 
 def _ordinary_workbook_or_400(session: Session, workbook_id: str) -> Workbook:
@@ -150,6 +157,8 @@ def project_revision(
             "order": item.sheet_order,
             "is_primary": item.is_primary,
             "is_issued": bool(item.is_issued),
+            "is_base": bool(item.is_base),
+            "show_change_highlight": bool(item.show_change_highlight),
             "updated_at": item.updated_at.isoformat() if item.updated_at else None,
             "cells": cell_stats.get(item.id, {}),
             "triangles_updated_at": triangle_updates.get(item.id),
@@ -160,6 +169,7 @@ def project_revision(
                 item.extra_parameters_json,
                 item.parameter_overrides_json,
                 item.deleted_parameters_json,
+                getattr(item, "report_notes_json", None) or "[]",
             ],
         }
         for item in sheets
@@ -238,7 +248,6 @@ def rename_sheet(
     target = session.get(Workbook, sheet_id)
     if target is None or (target.id != root.id and target.parent_workbook_id != root.id):
         raise HTTPException(status_code=404, detail="Лист не найден")
-    _require_ordinary_sheet(target)
     try:
         renamed = workbook_service.rename_sheet(session, target, body.name, username)
     except ValueError as exc:
@@ -268,6 +277,27 @@ def set_primary_sheet(
     }
 
 
+@router.post("/workbooks/{workbook_id}/issue-version")
+def issue_version(
+    workbook_id: str,
+    body: IssueVersionRequest | None = None,
+    session: Session = Depends(get_db),
+    username: str = Depends(require_editor),
+):
+    workbook = _workbook_or_404(session, workbook_id)
+    try:
+        sheets, issued = workbook_service.issue_version(
+            session, workbook, username, body.issued_kind if body else None
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "sheets": [workbook_service.sheet_brief(item) for item in sheets],
+        "active_sheet_id": issued.id,
+        "issued_sheet_id": issued.id,
+    }
+
+
 @router.patch("/workbooks/{workbook_id}/sheets/{sheet_id}/issued")
 def set_sheet_issued(
     workbook_id: str,
@@ -282,7 +312,56 @@ def set_sheet_issued(
     if target is None or (target.id != root.id and target.parent_workbook_id != root.id):
         raise HTTPException(status_code=404, detail="Лист не найден")
     try:
-        updated = workbook_service.set_sheet_issued(session, target, body.issued, username)
+        updated = workbook_service.set_sheet_issued(
+            session, target, body.issued, username, body.issued_kind
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    sheets = workbook_service.list_sheet_workbooks(session, root)
+    return {
+        "sheets": [workbook_service.sheet_brief(item) for item in sheets],
+        "active_sheet_id": updated.id,
+    }
+
+
+@router.patch("/workbooks/{workbook_id}/sheets/{sheet_id}/base")
+def set_base_sheet(
+    workbook_id: str,
+    sheet_id: str,
+    session: Session = Depends(get_db),
+    username: str = Depends(require_editor),
+):
+    workbook = _workbook_or_404(session, workbook_id)
+    root = workbook.parent or workbook
+    target = session.get(Workbook, sheet_id)
+    if target is None or (target.id != root.id and target.parent_workbook_id != root.id):
+        raise HTTPException(status_code=404, detail="Лист не найден")
+    try:
+        sheets = workbook_service.set_base_sheet(session, target, username)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    base = next((item for item in sheets if item.is_base), target)
+    return {
+        "sheets": [workbook_service.sheet_brief(item) for item in sheets],
+        "active_sheet_id": base.id,
+    }
+
+
+@router.patch("/workbooks/{workbook_id}/sheets/{sheet_id}/change-highlight")
+def set_change_highlight(
+    workbook_id: str,
+    sheet_id: str,
+    body: SheetChangeHighlightRequest,
+    session: Session = Depends(get_db),
+    username: str = Depends(require_editor),
+):
+    workbook = _workbook_or_404(session, workbook_id)
+    root = workbook.parent or workbook
+    target = session.get(Workbook, sheet_id)
+    if target is None or (target.id != root.id and target.parent_workbook_id != root.id):
+        raise HTTPException(status_code=404, detail="Лист не найден")
+    try:
+        updated = workbook_service.set_change_highlight(session, target, body.enabled)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     sheets = workbook_service.list_sheet_workbooks(session, root)
@@ -380,6 +459,36 @@ def export_report_table(
     )
 
 
+@router.post("/workbooks/{workbook_id}/report-notes", response_model=list[ReportNoteOut])
+def add_report_note(
+    workbook_id: str,
+    body: ReportNoteCreateRequest,
+    session: Session = Depends(get_db),
+    username: str = Depends(require_editor),
+):
+    workbook = _workbook_or_404(session, workbook_id)
+    try:
+        return workbook_service.add_report_note(
+            session, workbook, body.parameter_key, body.column_key, body.text, username
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete("/workbooks/{workbook_id}/report-notes/{note_id}", response_model=list[ReportNoteOut])
+def delete_report_note(
+    workbook_id: str,
+    note_id: str,
+    session: Session = Depends(get_db),
+    username: str = Depends(require_editor),
+):
+    workbook = _workbook_or_404(session, workbook_id)
+    try:
+        return workbook_service.delete_report_note(session, workbook, note_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/workbooks/{workbook_id}/import-excel")
 async def import_excel_sheets(
     workbook_id: str,
@@ -401,11 +510,8 @@ async def import_excel_sheets(
         if not importable_sheets:
             raise ValueError("В Excel-файле нет листов для импорта")
         sheets = workbook_service.list_sheet_workbooks(session, root)
-        use_root = (
-            root.sheet_name == "Исходные данные"
-            and not workbook_import.workbook_has_values(root)
-            and len(sheets) == 1
-        )
+        if workbook_service.is_placeholder_main_name(root.sheet_name) and not workbook_import.workbook_has_values(root):
+            root.sheet_name = workbook_service.MAIN_SHEET_NAME
         structure_source = root
         created: list[Workbook] = []
         imported_count = 0
@@ -422,15 +528,10 @@ async def import_excel_sheets(
                 name = f"{base_name[:255 - len(ending)]}{ending}"
                 suffix += 1
             existing_names.add(name.casefold())
-            if index == 0 and use_root:
-                target = root
-                target.sheet_order = 0
-                target.sheet_name = name
-            else:
-                target = workbook_import.copy_sheet(
-                    session, structure_source, name, username, include_values=False
-                )
-                target.sheet_name = name
+            target = workbook_import.copy_sheet(
+                session, structure_source, name, username, include_values=False
+            )
+            target.sheet_name = name
             count, grid, present_parameters, present_columns = workbook_import.import_sheet(
                 session, target, excel_sheet, username
             )
@@ -450,14 +551,10 @@ async def import_excel_sheets(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {
         "sheets": [
-            {
-                "id": item.id,
-                "name": item.sheet_name,
-                "order": item.sheet_order,
-            }
+            workbook_service.sheet_brief(item)
             for item in workbook_service.list_sheet_workbooks(session, root)
         ],
-        "active_sheet_id": created[0].id,
+        "active_sheet_id": root.id,
         "imported": imported_count,
         "journaled": journaled,
     }
@@ -761,6 +858,49 @@ def cell_history(
 ):
     workbook = _workbook_or_404(session, workbook_id)
     return workbook_service.cell_history(session, workbook, parameter_key, column_key)
+
+
+@router.post(
+    "/workbooks/{workbook_id}/cells/{parameter_key}/{column_key}/compare",
+    response_model=CellCompareOut,
+)
+def compare_cell(
+    workbook_id: str,
+    parameter_key: str,
+    column_key: str,
+    body: CellCompareRequest,
+    session: Session = Depends(get_db),
+    _username: str = Depends(require_reader),
+):
+    workbook = _workbook_or_404(session, workbook_id)
+    return workbook_service.compare_cell_across_sheets(
+        session,
+        workbook,
+        parameter_key,
+        column_key,
+        sheet_ids=body.sheet_ids,
+        range_from=body.range_from,
+        range_to=body.range_to,
+        combine=body.combine,
+    )
+
+
+@router.post("/workbooks/{workbook_id}/compare-sheet", response_model=SheetCompareOut)
+def compare_sheet(
+    workbook_id: str,
+    body: CellCompareRequest,
+    session: Session = Depends(get_db),
+    _username: str = Depends(require_reader),
+):
+    workbook = _workbook_or_404(session, workbook_id)
+    return workbook_service.compare_sheet_across_sheets(
+        session,
+        workbook,
+        sheet_ids=body.sheet_ids,
+        range_from=body.range_from,
+        range_to=body.range_to,
+        combine=body.combine,
+    )
 
 
 @router.get("/workbooks/{workbook_id}/cells/{parameter_key}/{column_key}/last-comment")

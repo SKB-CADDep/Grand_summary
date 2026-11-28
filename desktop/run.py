@@ -119,14 +119,16 @@ def main() -> None:
     _SHUTDOWN_REQUESTED.clear()
     if getattr(sys, "frozen", False):
         from src.app_info import local_app_root
+        from src.paths import default_working_data_dir
 
-        local_data = local_app_root() / "data"
+        data = default_working_data_dir()
+        local_prefs = local_app_root() / "data"
         os.environ["GRAND_SUMMARY_DESKTOP"] = "1"
-        os.environ.setdefault("GRAND_SUMMARY_DATA_DIR", str(local_data))
+        os.environ.setdefault("GRAND_SUMMARY_DATA_DIR", str(data))
         os.environ.setdefault(
-            "GRAND_SUMMARY_USER_PREFERENCES", str(local_data / "user_preferences.json")
+            "GRAND_SUMMARY_USER_PREFERENCES", str(local_prefs / "user_preferences.json")
         )
-        os.environ.setdefault("GRAND_SUMMARY_GUIDE", str(local_data / "guide_seen.json"))
+        os.environ.setdefault("GRAND_SUMMARY_GUIDE", str(local_prefs / "guide_seen.json"))
         os.environ["GRAND_SUMMARY_SQLITE_JOURNAL_MODE"] = "DELETE"
     else:
         from src.bootstrap import ensure_environment

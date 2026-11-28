@@ -4,8 +4,10 @@ from PyQt6.QtCore import QPoint, QRect, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QPen, QRegion
 from PyQt6.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
     QComboBox,
     QDialog,
+    QHeaderView,
     QDialogButtonBox,
     QFrame,
     QHBoxLayout,
@@ -23,6 +25,8 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from desktop.ui.style import configure_independent_window
 
 
 class GuideChoiceDialog(QDialog):
@@ -356,6 +360,7 @@ class ChangelogDialog(QDialog):
     def __init__(self, releases: list[dict], parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Журнал изменений приложения")
+        configure_independent_window(self)
         self.resize(820, 560)
         self._releases = releases
         layout = QVBoxLayout(self)
@@ -428,6 +433,7 @@ class JournalDialog(QDialog):
     def __init__(self, items: list[dict], parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Журнал изменений пользователей")
+        configure_independent_window(self)
         self.resize(960, 560)
         self._items = items
         layout = QVBoxLayout(self)
@@ -558,6 +564,7 @@ class InstructionDialog(QDialog):
     def __init__(self, text: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Инструкция")
+        configure_independent_window(self)
         self.resize(720, 560)
         layout = QVBoxLayout(self)
         view = QTextBrowser()
@@ -687,16 +694,30 @@ class UnsavedDialog(QDialog):
 
 
 class NotificationsDialog(QDialog):
+    settings_requested = pyqtSignal()
+
     def __init__(self, items: list[dict], parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Уведомления")
-        self.resize(560, 360)
+        configure_independent_window(self)
+        self.resize(560, 400)
         layout = QVBoxLayout(self)
+        toolbar = QHBoxLayout()
+        settings_btn = QPushButton("Настроить уведомления")
+        settings_btn.clicked.connect(self.settings_requested.emit)
+        toolbar.addWidget(settings_btn)
+        toolbar.addStretch(1)
+        layout.addLayout(toolbar)
         self.list = QListWidget()
-        for item in items:
-            row = QListWidgetItem(item.get("text") or item.get("message") or str(item))
-            row.setData(Qt.ItemDataRole.UserRole, item.get("id"))
-            self.list.addItem(row)
+        if items:
+            for item in items:
+                row = QListWidgetItem(item.get("text") or item.get("message") or str(item))
+                row.setData(Qt.ItemDataRole.UserRole, item.get("id"))
+                self.list.addItem(row)
+        else:
+            empty = QListWidgetItem("Нет уведомлений")
+            empty.setFlags(Qt.ItemFlag.NoItemFlags)
+            self.list.addItem(empty)
         layout.addWidget(self.list)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)
@@ -709,3 +730,123 @@ class NotificationsDialog(QDialog):
         if note_id:
             self.selected_ids.append(str(note_id))
             item.setText(item.text() + " (прочитано)")
+
+
+class NotificationSettingsDialog(QDialog):
+    def __init__(self, settings: dict, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Настройка уведомлений")
+        configure_independent_window(self)
+        self.resize(820, 480)
+        layout = QVBoxLayout(self)
+        intro = QLabel(
+            "По умолчанию приходят уведомления, если кто-то изменил ячейку, которую вы меняли раньше. "
+            "Можно отключить это правило целиком или настроить каждый объект со сводкой отдельно: "
+            "выключить объект, оставить только свои ячейки или получать все изменения ячеек."
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+        self.watch_mine = QCheckBox("Уведомлять об изменениях ячеек, которые я менял ранее")
+        self.watch_mine.setChecked(bool(settings.get("watch_my_cells", True)))
+        layout.addWidget(self.watch_mine)
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(["Объект", "Уведомления", "Мои ячейки", "Все изменения"])
+        self.table.verticalHeader().setVisible(False)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        layout.addWidget(self.table, 1)
+        self._object_rows: list[dict] = []
+        for item in settings.get("objects") or []:
+            self._add_object_row(item)
+        if not self._object_rows:
+            empty = QLabel("Нет объектов в работе. Настройки по объектам появятся, когда у объекта будет сводка.")
+            empty.setProperty("role", "hint")
+            empty.setWordWrap(True)
+            layout.addWidget(empty)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self.watch_mine.toggled.connect(self._sync_object_defaults)
+
+    def _add_object_row(self, item: dict) -> None:
+        row = self.table.rowCount()
+        self.table.insertRow(row)
+        name = QTableWidgetItem(item.get("object_name") or "")
+        name.setData(Qt.ItemDataRole.UserRole, item.get("object_id"))
+        self.table.setItem(row, 0, name)
+        enabled = QCheckBox()
+        enabled.setChecked(bool(item.get("enabled", True)))
+        mine = QCheckBox()
+        mine.setChecked(bool(item.get("watch_my_cells", True)))
+        all_cells = QCheckBox()
+        all_cells.setChecked(bool(item.get("watch_all_cells", False)))
+        self.table.setCellWidget(row, 1, enabled)
+        self.table.setCellWidget(row, 2, mine)
+        self.table.setCellWidget(row, 3, all_cells)
+        enabled.toggled.connect(lambda checked, mine_box=mine, all_box=all_cells: self._toggle_row(checked, mine_box, all_box))
+        self._toggle_row(enabled.isChecked(), mine, all_cells)
+        self._object_rows.append({"enabled": enabled, "watch_my_cells": mine, "watch_all_cells": all_cells})
+
+    def _toggle_row(self, enabled: bool, mine: QCheckBox, all_cells: QCheckBox) -> None:
+        mine.setEnabled(enabled)
+        all_cells.setEnabled(enabled)
+
+    def _sync_object_defaults(self, checked: bool) -> None:
+        for row in self._object_rows:
+            if row["enabled"].isChecked() and not row["watch_all_cells"].isChecked():
+                row["watch_my_cells"].setChecked(checked)
+
+    def payload(self) -> dict:
+        objects = []
+        for index, row in enumerate(self._object_rows):
+            name_item = self.table.item(index, 0)
+            objects.append(
+                {
+                    "object_id": name_item.data(Qt.ItemDataRole.UserRole) if name_item else "",
+                    "object_name": name_item.text() if name_item else "",
+                    "enabled": row["enabled"].isChecked(),
+                    "watch_my_cells": row["watch_my_cells"].isChecked(),
+                    "watch_all_cells": row["watch_all_cells"].isChecked(),
+                }
+            )
+        return {"watch_my_cells": self.watch_mine.isChecked(), "objects": objects}
+
+
+class IssuedKindDialog(QDialog):
+    def __init__(self, parent: QWidget | None = None, *, title: str = "Тип выдачи", prompt: str = "") -> None:
+        super().__init__(parent)
+        from desktop.ui.icons import issued_kind_icon
+        from src.issued_kinds import CHOICES, DEFAULT
+
+        self.setWindowTitle(title)
+        self.resize(420, 180)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+        if prompt:
+            label = QLabel(prompt)
+            label.setWordWrap(True)
+            layout.addWidget(label)
+        kind_label = QLabel("Тип выдачи")
+        kind_label.setProperty("role", "hint")
+        layout.addWidget(kind_label)
+        self.combo = QComboBox()
+        for key, name in CHOICES:
+            self.combo.addItem(issued_kind_icon(key), name, key)
+        self.combo.setCurrentIndex(self.combo.findData(DEFAULT))
+        layout.addWidget(self.combo)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def selected_kind(self) -> str:
+        return str(self.combo.currentData() or "")
+
+
+def choose_issued_kind(parent: QWidget | None, title: str, prompt: str = "") -> str | None:
+    dialog = IssuedKindDialog(parent, title=title, prompt=prompt)
+    if dialog.exec() != QDialog.DialogCode.Accepted:
+        return None
+    return dialog.selected_kind()

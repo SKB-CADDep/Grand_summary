@@ -12,6 +12,8 @@ from backend.schemas import (
     InstructionResponse,
     JournalItemOut,
     NotificationOut,
+    NotificationSettingsIn,
+    NotificationSettingsOut,
     UserResponse,
 )
 from src.app_info import APP_VERSION
@@ -20,6 +22,7 @@ from src.services import acl
 from src.services import guide as guide_service
 from src.services import journal as journal_service
 from src.services import user_preferences as preferences_service
+from src.services import notification_settings as notification_settings_service
 from src.services import workbooks as workbook_service
 
 router = APIRouter(tags=["Health"])
@@ -109,3 +112,17 @@ def read_notification(
     if note is None:
         raise HTTPException(status_code=404, detail="Уведомление не найдено")
     return note
+
+
+@router.get("/notification-settings", response_model=NotificationSettingsOut)
+def get_notification_settings(session: Session = Depends(get_db), username: str = Depends(require_reader)):
+    return notification_settings_service.list_settings(session, username)
+
+
+@router.put("/notification-settings", response_model=NotificationSettingsOut)
+def put_notification_settings(
+    body: NotificationSettingsIn,
+    session: Session = Depends(get_db),
+    username: str = Depends(require_reader),
+):
+    return notification_settings_service.save_settings(session, username, body.model_dump())

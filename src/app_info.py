@@ -7,8 +7,8 @@ import sys
 from pathlib import Path
 
 APP_NAME = "GrandSummary"
-# Первая передача в работу. Номер меняется только по явной просьбе.
-APP_VERSION = "0.0.1"
+# Номер меняется только по явной просьбе.
+APP_VERSION = "0.0.2"
 LAUNCHER_EXE_NAME = "GrandSummary.exe"
 APP_EXE_NAME = "GrandSummary.exe"
 DATA_DIR_ENV = "GRAND_SUMMARY_DATA_DIR"

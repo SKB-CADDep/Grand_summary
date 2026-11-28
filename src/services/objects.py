@@ -7,7 +7,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from backend.models import ObjectItem, Workbook
+from backend.models import Cell, ObjectItem, Workbook
 from src.paths import objects_database_path
 
 
@@ -44,7 +44,12 @@ def read_object_catalog() -> list[dict[str, Any]]:
 
 def _local_object(session: Session, record: dict[str, Any]) -> ObjectItem:
     external_id = _text(record.get("ID_projects"))
-    item = session.query(ObjectItem).filter(ObjectItem.external_id == external_id).first()
+    item = (
+        session.query(ObjectItem)
+        .filter(ObjectItem.external_id == external_id)
+        .order_by(ObjectItem.created_at, ObjectItem.id)
+        .first()
+    )
     if item is None:
         item = ObjectItem(id=str(uuid.uuid4()), external_id=external_id, name=_record_name(record))
         session.add(item)
@@ -109,9 +114,33 @@ def create_object(
 
 
 def workbook_for_object(session: Session, object_id: str) -> Workbook | None:
+    item = session.get(ObjectItem, object_id)
+    object_ids = [object_id]
+    if item is not None and item.external_id:
+        object_ids = [
+            row[0]
+            for row in session.query(ObjectItem.id).filter(ObjectItem.external_id == item.external_id).all()
+        ]
+        if object_id not in object_ids:
+            object_ids.insert(0, object_id)
     return (
         session.query(Workbook)
-        .filter(Workbook.object_id == object_id, Workbook.parent_workbook_id.is_(None))
+        .filter(Workbook.object_id.in_(object_ids), Workbook.parent_workbook_id.is_(None))
         .order_by(Workbook.created_at.desc())
         .first()
     )
+
+
+def last_editor_for_workbook(session: Session, workbook: Workbook) -> str | None:
+    sheet_ids = [workbook.id, *[sheet.id for sheet in workbook.sheets]]
+    row = (
+        session.query(Cell.updated_by)
+        .filter(
+            Cell.workbook_id.in_(sheet_ids),
+            Cell.updated_by.is_not(None),
+            Cell.updated_at.is_not(None),
+        )
+        .order_by(Cell.updated_at.desc())
+        .first()
+    )
+    return row[0] if row else None

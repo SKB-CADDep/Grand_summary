@@ -4,12 +4,13 @@ from PyQt6.QtCore import QPoint, QRect, Qt, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QFont, QMouseEvent, QPainter
 from PyQt6.QtWidgets import (
     QAbstractItemView,
-    QApplication,
     QComboBox,
     QDialog,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
+    QMenu,
     QPushButton,
     QStyledItemDelegate,
     QTableWidget,
@@ -18,8 +19,14 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from desktop.ui.style import COMPUTED, CONFIRMED, DRAFT, HEADER_BG, PARAM_BG, SECTION_BG, UNIFIED
-from src.services.report_generation import SHORT_NOZZLE_ROWS, SHORT_ROTOR_ROWS
+from desktop.ui.style import COMPUTED, CONFIRMED, DRAFT, HEADER_BG, PARAM_BG, SECTION_BG, UNIFIED, configure_independent_window
+from src.services.report_generation import (
+    REPORT_NOTE_NAME,
+    REPORT_NOTE_UNIT,
+    SHORT_NOZZLE_ROWS,
+    SHORT_ROTOR_ROWS,
+    format_cell_with_notes,
+)
 
 HEADER_LINE = QColor("#d9e3f0")
 HEADER_TEXT = QColor("#263238")
@@ -201,17 +208,7 @@ class _PreviewNameDelegate(QStyledItemDelegate):
 
 
 class _ReportPreviewDialog(QDialog):
-    def showEvent(self, event) -> None:  # noqa: N802
-        super().showEvent(event)
-        if self.property("_filling_screen"):
-            return
-        screen = self.screen() or QApplication.primaryScreen()
-        if screen is None:
-            return
-        self.setProperty("_filling_screen", True)
-        self.setGeometry(screen.geometry())
-        self.setWindowState(self.windowState() | Qt.WindowState.WindowFullScreen)
-        self.setProperty("_filling_screen", False)
+    pass
 
 
 class ReportHeader(QHeaderView):
@@ -337,6 +334,9 @@ class ReportHeader(QHeaderView):
 class ReportPage(QWidget):
     preview_requested = pyqtSignal(str, str)
     export_requested = pyqtSignal(str, list, list)
+    issue_version_requested = pyqtSignal()
+    note_add_requested = pyqtSignal(str, str, str, str)
+    note_delete_requested = pyqtSignal(str, str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -349,6 +349,8 @@ class ReportPage(QWidget):
         self._sheet_id = ""
         self._busy = False
         self._reselect = False
+        self._preview_windows: list[QDialog] = []
+        self._notes: list[dict] = []
 
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 10, 12, 10)
@@ -388,18 +390,36 @@ class ReportPage(QWidget):
         header.column_group_toggle_requested.connect(self._toggle_header_group)
         header.table_toggle_requested.connect(self._toggle_table)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._cell_menu)
+        self.table.itemSelectionChanged.connect(self._refresh_actions)
         self.table.verticalHeader().hide()
         self.table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         root.addWidget(self.table, 1)
 
+        self.notes_box = QLabel()
+        self.notes_box.setObjectName("report-footnotes")
+        self.notes_box.setWordWrap(True)
+        self.notes_box.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.notes_box.hide()
+        root.addWidget(self.notes_box)
+
         buttons = QHBoxLayout()
         self.preview_btn = QPushButton("Предпросмотр")
         self.export_btn = QPushButton("Экспорт в Word")
+        self.issue_btn = QPushButton("Выдать версию")
+        self.note_btn = QPushButton("Добавить примечание")
         self.preview_btn.clicked.connect(self._preview)
         self.export_btn.clicked.connect(self._export)
+        self.issue_btn.clicked.connect(self.issue_version_requested.emit)
+        self.note_btn.clicked.connect(self._add_note_for_current)
         buttons.addWidget(self.preview_btn)
         buttons.addWidget(self.export_btn)
+        buttons.addWidget(self.issue_btn)
+        buttons.addWidget(self.note_btn)
         buttons.addStretch(1)
         root.addLayout(buttons)
 
@@ -426,6 +446,7 @@ class ReportPage(QWidget):
         cells: list[dict],
         busy: bool = False,
         sheet_id: str | None = None,
+        notes: list[dict] | None = None,
     ) -> None:
         self._busy = busy
         next_id = str(sheet_id or self.current_sheet_id() or "")
@@ -433,12 +454,21 @@ class ReportPage(QWidget):
         self._sheet_id = next_id
         self._catalog = catalog
         self._cells = {f"{cell.get('parameter_key')}:{cell.get('column_key')}": cell for cell in cells}
+        if notes is not None:
+            self._notes = list(notes)
+        elif sheet_changed:
+            self._notes = []
         if catalog and (sheet_changed or self._reselect):
             self._apply_type_selection()
             self._reselect = False
         self._rebuild()
         self._refresh_actions()
         self.empty.setVisible(catalog is None)
+
+    def set_notes(self, notes: list[dict]) -> None:
+        self._notes = list(notes)
+        self._rebuild()
+        self._refresh_actions()
 
     def current_sheet_id(self) -> str:
         return str(self.sheet_combo.currentData() or "")
@@ -494,6 +524,8 @@ class ReportPage(QWidget):
         ready = bool(self._included_params and self._included_cols and self._catalog)
         self.preview_btn.setDisabled(not ready)
         self.export_btn.setDisabled(self._busy or not ready)
+        self.issue_btn.setDisabled(self._busy or not self._catalog)
+        self.note_btn.setDisabled(self._busy or self._current_cell_ref() is None)
 
     def _toggle_button(self, included: bool, tooltip: str, handler, partial: bool = False) -> QPushButton:
         button = QPushButton("+" if included else ("±" if partial else "−"))
@@ -519,6 +551,7 @@ class ReportPage(QWidget):
         self.table.setColumnCount(3 + len(columns))
         self.table.setHorizontalHeaderLabels([" ", "Наименование параметра", "Ед. изм."] + [col.get("label") or "" for col in columns])
         self.table.setRowCount(len(parameters))
+        note_map = self._note_map()
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         header.resizeSection(0, 36)
@@ -550,16 +583,26 @@ class ReportPage(QWidget):
                     lambda _=False, param_key=key: self._toggle_parameter(param_key),
                 )
                 self.table.setCellWidget(row, 0, button)
-            name = QTableWidgetItem(("    " * int(param.get("indent") or 0)) + _param_label(param))
-            name.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            name = QTableWidgetItem(
+                format_cell_with_notes(
+                    ("    " * int(param.get("indent") or 0)) + _param_label(param),
+                    note_map.get((key, REPORT_NOTE_NAME), []),
+                )
+            )
+            name.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
             name.setBackground(QBrush(QColor(SECTION_BG if section else PARAM_BG)))
             if section:
                 font = name.font()
                 font.setBold(True)
                 name.setFont(font)
             self.table.setItem(row, 1, name)
-            unit_item = QTableWidgetItem(param.get("unit") or "" if param.get("row_kind") == "editable" else "")
-            unit_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            unit_item = QTableWidgetItem(
+                format_cell_with_notes(
+                    param.get("unit") or "" if param.get("row_kind") == "editable" else "",
+                    note_map.get((key, REPORT_NOTE_UNIT), []),
+                )
+            )
+            unit_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
             unit_item.setBackground(QBrush(QColor(SECTION_BG if section else PARAM_BG)))
             self.table.setItem(row, 2, unit_item)
             if section:
@@ -568,7 +611,12 @@ class ReportPage(QWidget):
                 dim_row = key not in self._included_params
             for col_index, column in enumerate(columns):
                 cell = self._cells.get(f"{param.get('key')}:{column.get('key')}")
-                item = QTableWidgetItem((cell or {}).get("display") or "")
+                item = QTableWidgetItem(
+                    format_cell_with_notes(
+                        (cell or {}).get("display") or "",
+                        note_map.get((param.get("key") or "", column.get("key") or ""), []),
+                    )
+                )
                 item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 brush = _status_brush(cell, param.get("row_kind") or "editable")
@@ -585,6 +633,7 @@ class ReportPage(QWidget):
         self.table.verticalScrollBar().setValue(scroll_y)
         header.update()
         header.viewport().update()
+        self._refresh_notes_box()
 
     def _toggle_keys(self, keys: list[str], included: set[str]) -> None:
         if keys and all(key in included for key in keys):
@@ -668,10 +717,7 @@ class ReportPage(QWidget):
         dialog = _ReportPreviewDialog(self.window() or self)
         dialog.setObjectName("report-preview")
         dialog.setWindowTitle("Предпросмотр таблицы")
-        dialog.setModal(True)
-        dialog.setWindowFlags(
-            Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window
-        )
+        configure_independent_window(dialog)
         dialog.setStyleSheet("QDialog#report-preview { background: #ffffff; }")
         layout = QVBoxLayout(dialog)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -700,6 +746,7 @@ class ReportPage(QWidget):
             ["Наименование параметра", "Ед. изм."] + [col.get("label") or "" for col in columns]
         )
         table.setRowCount(len(parameters))
+        note_map = self._note_map()
         header = table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
@@ -710,7 +757,9 @@ class ReportPage(QWidget):
             header.setMinimumSectionSize(72)
         for row, param in enumerate(parameters):
             section = param.get("row_kind") in {"section", "computed"}
-            name = QTableWidgetItem(_param_label(param))
+            name = QTableWidgetItem(
+                format_cell_with_notes(_param_label(param), note_map.get((param.get("key") or "", REPORT_NOTE_NAME), []))
+            )
             name.setFlags(Qt.ItemFlag.ItemIsEnabled)
             name.setData(Qt.ItemDataRole.UserRole, int(param.get("indent") or 0))
             name.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
@@ -720,7 +769,12 @@ class ReportPage(QWidget):
                 font.setBold(True)
                 name.setFont(font)
             table.setItem(row, 0, name)
-            unit_item = QTableWidgetItem(param.get("unit") or "" if param.get("row_kind") == "editable" else "")
+            unit_item = QTableWidgetItem(
+                format_cell_with_notes(
+                    param.get("unit") or "" if param.get("row_kind") == "editable" else "",
+                    note_map.get((param.get("key") or "", REPORT_NOTE_UNIT), []),
+                )
+            )
             unit_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
             unit_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             unit_item.setBackground(QBrush(QColor(SECTION_BG if section else PARAM_BG)))
@@ -731,7 +785,12 @@ class ReportPage(QWidget):
             table.setItem(row, 1, unit_item)
             for col_index, column in enumerate(columns):
                 cell = self._cells.get(f"{param.get('key')}:{column.get('key')}")
-                item = QTableWidgetItem((cell or {}).get("display") or "")
+                item = QTableWidgetItem(
+                    format_cell_with_notes(
+                        (cell or {}).get("display") or "",
+                        note_map.get((param.get("key") or "", column.get("key") or ""), []),
+                    )
+                )
                 item.setFlags(Qt.ItemFlag.ItemIsEnabled)
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 brush = _status_brush(cell, param.get("row_kind") or "editable")
@@ -743,6 +802,16 @@ class ReportPage(QWidget):
         body_layout = QVBoxLayout(body)
         body_layout.setContentsMargins(12, 12, 12, 0)
         body_layout.addWidget(table, 1)
+        if self._notes:
+            footnotes = QLabel()
+            footnotes.setWordWrap(True)
+            footnotes.setText(
+                "\n".join(
+                    ["Примечания"]
+                    + [f"*{note.get('number')} {note.get('text') or ''}" for note in sorted(self._notes, key=lambda item: int(item.get("number") or 0))]
+                )
+            )
+            body_layout.addWidget(footnotes)
         layout.addWidget(body, 1)
         actions = QHBoxLayout()
         actions.setContentsMargins(16, 12, 16, 16)
@@ -755,11 +824,99 @@ class ReportPage(QWidget):
 
     def _preview(self) -> None:
         dialog = self._build_preview()
-        if dialog is not None:
-            dialog.exec()
+        if dialog is None:
+            return
+        dialog.destroyed.connect(lambda *_args, win=dialog: self._forget_preview_window(win))
+        self._preview_windows.append(dialog)
+        dialog.show()
+        dialog.showMaximized()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _forget_preview_window(self, window: QDialog) -> None:
+        self._preview_windows = [item for item in self._preview_windows if item is not window]
 
     def _export(self) -> None:
         params, cols = self._selected_keys()
         sheet_id = self.current_sheet_id()
         if sheet_id and params and cols:
             self.export_requested.emit(sheet_id, params, cols)
+
+    def _note_map(self) -> dict[tuple[str, str], list[int]]:
+        mapping: dict[tuple[str, str], list[int]] = {}
+        for note in sorted(self._notes, key=lambda item: int(item.get("number") or 0)):
+            mapping.setdefault((note.get("parameter_key") or "", note.get("column_key") or ""), []).append(
+                int(note.get("number") or 0)
+            )
+        return mapping
+
+    def _refresh_notes_box(self) -> None:
+        if not self._notes:
+            self.notes_box.hide()
+            self.notes_box.clear()
+            return
+        lines = ["Примечания"]
+        for note in sorted(self._notes, key=lambda item: int(item.get("number") or 0)):
+            lines.append(f"*{note.get('number')} {note.get('text') or ''}")
+        self.notes_box.setText("\n".join(lines))
+        self.notes_box.show()
+
+    def _current_cell_ref(self) -> tuple[str, str] | None:
+        return self._cell_ref(self.table.currentRow(), self.table.currentColumn())
+
+    def _cell_ref(self, row: int, column: int) -> tuple[str, str] | None:
+        if row < 0 or column < 1 or not self._catalog:
+            return None
+        parameters = self._catalog.get("parameters") or []
+        if row >= len(parameters):
+            return None
+        key = parameters[row].get("key") or ""
+        if not key:
+            return None
+        if column == 1:
+            return key, REPORT_NOTE_NAME
+        if column == 2:
+            return key, REPORT_NOTE_UNIT
+        columns = self._catalog.get("columns") or []
+        index = column - 3
+        if 0 <= index < len(columns) and columns[index].get("key"):
+            return key, columns[index]["key"]
+        return None
+
+    def _cell_menu(self, pos) -> None:
+        index = self.table.indexAt(pos)
+        ref = self._cell_ref(index.row(), index.column())
+        if ref is None:
+            return
+        self.table.setCurrentCell(index.row(), index.column())
+        menu = QMenu(self)
+        menu.addAction("Добавить примечание", lambda: self._prompt_add_note(ref))
+        for note in self._notes:
+            if (note.get("parameter_key"), note.get("column_key")) != ref:
+                continue
+            number = note.get("number")
+            note_id = str(note.get("id") or "")
+            menu.addAction(
+                f"Удалить *{number}",
+                lambda _=False, item_id=note_id: self._delete_note(item_id),
+            )
+        menu.exec(self.table.viewport().mapToGlobal(pos))
+
+    def _add_note_for_current(self) -> None:
+        ref = self._current_cell_ref()
+        if ref:
+            self._prompt_add_note(ref)
+
+    def _prompt_add_note(self, ref: tuple[str, str]) -> None:
+        sheet_id = self.current_sheet_id()
+        if not sheet_id:
+            return
+        text, ok = QInputDialog.getMultiLineText(self, "Примечание", "Текст примечания")
+        if not ok or not text.strip():
+            return
+        self.note_add_requested.emit(sheet_id, ref[0], ref[1], text.strip())
+
+    def _delete_note(self, note_id: str) -> None:
+        sheet_id = self.current_sheet_id()
+        if sheet_id and note_id:
+            self.note_delete_requested.emit(sheet_id, note_id)

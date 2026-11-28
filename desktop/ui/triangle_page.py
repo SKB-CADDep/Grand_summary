@@ -837,7 +837,9 @@ class TrianglePage(QWidget):
     def set_data(self, sheets: list[dict], targets: list[dict], can_write: bool, busy: bool) -> None:
         self._sheets = sheets
         self._targets = [
-            item for item in targets if not item.get("is_primary") and not item.get("is_issued")
+            item
+            for item in targets
+            if item.get("is_primary") and not item.get("is_issued") and not item.get("is_base")
         ]
         self._can_write = can_write
         self._busy = busy

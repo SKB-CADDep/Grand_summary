@@ -60,11 +60,25 @@ def reset_engine(url: str | None = None) -> None:
     SessionLocal.configure(bind=engine)
 
 
+def _export_sqlite_json() -> None:
+    if not str(engine.url).startswith("sqlite"):
+        return
+    try:
+        from src.services.db_json import export_database_json
+
+        export_database_json()
+    except Exception:
+        return
+
+
 def get_session() -> Generator[Session, None, None]:
     session = SessionLocal()
     try:
         yield session
+        changed = bool(session.new or session.dirty or session.deleted)
         session.commit()
+        if changed:
+            _export_sqlite_json()
     except Exception:
         session.rollback()
         raise
@@ -86,7 +100,11 @@ def _migrate_sqlite() -> None:
         "ALTER TABLE workbooks ADD COLUMN sheet_order INTEGER DEFAULT 0",
         "ALTER TABLE workbooks ADD COLUMN is_primary BOOLEAN DEFAULT 0",
         "ALTER TABLE workbooks ADD COLUMN is_issued BOOLEAN DEFAULT 0",
+        "ALTER TABLE workbooks ADD COLUMN issued_kind VARCHAR(32) DEFAULT ''",
+        "ALTER TABLE workbooks ADD COLUMN is_base BOOLEAN DEFAULT 0",
+        "ALTER TABLE workbooks ADD COLUMN show_change_highlight BOOLEAN DEFAULT 1",
         "ALTER TABLE workbooks ADD COLUMN issued_snapshot_json TEXT DEFAULT '[]'",
+        "ALTER TABLE workbooks ADD COLUMN report_notes_json TEXT DEFAULT '[]'",
         "ALTER TABLE cells ADD COLUMN locked BOOLEAN DEFAULT 0",
         "ALTER TABLE cells ADD COLUMN unified BOOLEAN DEFAULT 0",
         "ALTER TABLE cells ADD COLUMN excel_highlight BOOLEAN DEFAULT 0",
@@ -122,3 +140,4 @@ def init_db() -> None:
 
     Base.metadata.create_all(bind=engine)
     _migrate_sqlite()
+    _export_sqlite_json()

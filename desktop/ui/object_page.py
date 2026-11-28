@@ -2,24 +2,41 @@ from __future__ import annotations
 
 from PyQt6.QtCore import QEvent, QPoint, QRect, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QKeyEvent, QMouseEvent, QPalette
+from datetime import datetime
+
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QFrame,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
     QPushButton,
     QSizePolicy,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
 
+def _format_when(value: object) -> str:
+    if not value:
+        return "—"
+    text = str(value)
+    try:
+        moment = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return text
+    return moment.astimezone().strftime("%d.%m.%Y %H:%M")
+
+
 class ObjectPage(QWidget):
     object_selected = pyqtSignal(str)
+    object_open_table_requested = pyqtSignal(str)
     import_parameters_requested = pyqtSignal()
     import_triangle_requested = pyqtSignal()
 
@@ -99,7 +116,27 @@ class ObjectPage(QWidget):
         actions.addWidget(self.import_triangle_btn)
         actions.addStretch(1)
         root.addLayout(actions)
-        root.addStretch(1)
+
+        summary_title = QLabel("Сводка работы с объектами")
+        summary_title.setStyleSheet("font-weight: 600; font-size: 15px;")
+        root.addWidget(summary_title)
+        self.work_hint = QLabel("Пока ни один объект не взят в работу.")
+        self.work_hint.setProperty("role", "hint")
+        self.work_hint.setWordWrap(True)
+        root.addWidget(self.work_hint)
+        self.work_table = QTableWidget(0, 7)
+        self.work_table.setHorizontalHeaderLabels(
+            ["Объект", "Станция", "Турбина", "Листов", "Обновлено", "Кто изменил", "Кто начал"]
+        )
+        self.work_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.work_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.work_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.work_table.verticalHeader().setVisible(False)
+        self.work_table.horizontalHeader().setStretchLastSection(True)
+        self.work_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.work_table.cellDoubleClicked.connect(self._open_work_row)
+        self.work_table.viewport().installEventFilter(self)
+        root.addWidget(self.work_table, 1)
 
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
@@ -115,6 +152,10 @@ class ObjectPage(QWidget):
         super().hideEvent(event)
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
+        table = getattr(self, "work_table", None)
+        if table is not None and watched is table.viewport() and event.type() == QEvent.Type.MouseButtonPress:
+            pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+            self._clear_work_selection_if_empty(pos)
         if event.type() == QEvent.Type.MouseButtonPress and self.popup.isVisible():
             if isinstance(event, QMouseEvent):
                 global_pos = event.globalPosition().toPoint()
@@ -165,6 +206,7 @@ class ObjectPage(QWidget):
             self.search.setText(selected.get("name") or "")
         self._updating = False
         self._show_selected(selected)
+        self._fill_work_summary()
         if selected:
             self._hide_popup()
         elif self.search.hasFocus() and self.search.text().strip():
@@ -247,6 +289,43 @@ class ObjectPage(QWidget):
 
     def _hide_popup(self) -> None:
         self.popup.hide()
+
+    def _fill_work_summary(self) -> None:
+        rows = [item for item in self._objects if item.get("has_workbook")]
+        rows.sort(key=lambda item: str(item.get("workbook_updated_at") or ""), reverse=True)
+        self.work_hint.setText(
+            f"В работе {len(rows)} объект(ов) со статусом «есть сводка». Двойной щелчок открывает объект."
+            if rows
+            else "Пока ни один объект не взят в работу."
+        )
+        self.work_table.setRowCount(len(rows))
+        for index, item in enumerate(rows):
+            values = [
+                item.get("name") or "",
+                item.get("station") or "—",
+                item.get("turbine") or "—",
+                str(item.get("sheet_count") or 1),
+                _format_when(item.get("workbook_updated_at")),
+                item.get("last_edited_by") or "—",
+                item.get("started_by") or "—",
+            ]
+            for column, value in enumerate(values):
+                cell = QTableWidgetItem(value)
+                cell.setData(Qt.ItemDataRole.UserRole, item.get("id"))
+                self.work_table.setItem(index, column, cell)
+        self.work_table.resizeColumnsToContents()
+
+    def _clear_work_selection_if_empty(self, pos) -> None:
+        index = self.work_table.indexAt(pos)
+        if index.isValid():
+            return
+        self.work_table.clearSelection()
+
+    def _open_work_row(self, row: int, _column: int) -> None:
+        item = self.work_table.item(row, 0)
+        object_id = item.data(Qt.ItemDataRole.UserRole) if item else None
+        if object_id:
+            self.object_open_table_requested.emit(str(object_id))
 
     def _pick(self, item: QListWidgetItem) -> None:
         object_id = item.data(Qt.ItemDataRole.UserRole)

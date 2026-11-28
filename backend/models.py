@@ -36,10 +36,13 @@ class Workbook(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     created_by: Mapped[str] = mapped_column(String(128), nullable=False)
     parent_workbook_id: Mapped[str | None] = mapped_column(ForeignKey("workbooks.id"), nullable=True, index=True)
-    sheet_name: Mapped[str] = mapped_column(String(255), nullable=False, default="Исходные данные")
+    sheet_name: Mapped[str] = mapped_column(String(255), nullable=False, default="Основная таблица")
     sheet_order: Mapped[int] = mapped_column(default=0)
     is_primary: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_issued: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    issued_kind: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    is_base: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    show_change_highlight: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     issued_snapshot_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     extra_columns_json: Mapped[str] = mapped_column(Text, default="[]")
     column_overrides_json: Mapped[str] = mapped_column(Text, default="{}")
@@ -47,6 +50,7 @@ class Workbook(Base):
     extra_parameters_json: Mapped[str] = mapped_column(Text, default="[]")
     parameter_overrides_json: Mapped[str] = mapped_column(Text, default="{}")
     deleted_parameters_json: Mapped[str] = mapped_column(Text, default="[]")
+    report_notes_json: Mapped[str] = mapped_column(Text, default="[]")
 
     object: Mapped[ObjectItem] = relationship(back_populates="workbooks")
     parent: Mapped["Workbook | None"] = relationship(remote_side="Workbook.id", back_populates="sheets")
@@ -152,3 +156,15 @@ class Notification(Base):
     message: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     read: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class NotificationSetting(Base):
+    __tablename__ = "notification_settings"
+    __table_args__ = (UniqueConstraint("username", "object_id", name="uq_notification_setting"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    username: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    object_id: Mapped[str] = mapped_column(String(36), nullable=False, default="", index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    watch_my_cells: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    watch_all_cells: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

@@ -65,20 +65,24 @@ def copy_sheet(
         extra_parameters_json=source.extra_parameters_json,
         parameter_overrides_json=source.parameter_overrides_json,
         deleted_parameters_json=source.deleted_parameters_json,
+        report_notes_json=getattr(source, "report_notes_json", None) or "[]",
     )
     session.add(clone)
     session.flush()
-    if include_values and workbook_service.primary_sheet(source).id != source.id:
+    if include_values:
         base = workbook_service._base_cells(source)
+        skip_inherited = not workbook_service.sheet_is_frozen(source) and workbook_service.primary_sheet(source).id != source.id
         stored = {(item.parameter_key, item.column_key): item for item in source.cells}
         source_cells = (
-            workbook_service.cells_from_issued_snapshot(source) if source.is_issued else list(source.cells)
+            workbook_service.cells_from_issued_snapshot(source)
+            if workbook_service.sheet_is_frozen(source)
+            else list(source.cells)
         )
         copied: list[tuple[Cell, Cell]] = []
         for cell in source_cells:
             if not (cell.value or cell.draft_value or cell.hyperlink):
                 continue
-            if workbook_service.cell_matches_base(cell, base.get((cell.parameter_key, cell.column_key))):
+            if skip_inherited and workbook_service.cell_matches_base(cell, base.get((cell.parameter_key, cell.column_key))):
                 continue
             clone_cell = Cell(
                 id=workbook_service._new_id(),
@@ -91,7 +95,7 @@ def copy_sheet(
                 hyperlink=cell.hyperlink,
                 locked=bool(cell.locked),
                 unified=bool(cell.unified),
-                excel_highlight=bool(cell.excel_highlight) and not source.is_issued,
+                excel_highlight=bool(cell.excel_highlight) and not workbook_service.sheet_is_frozen(source),
                 updated_by=username,
                 updated_at=workbook_service._now(),
             )
@@ -238,6 +242,36 @@ def _sheet_value(
     return carried
 
 
+def apply_slice_to_main(
+    session: Session,
+    main: Workbook,
+    values: dict[tuple[str, str], str],
+    username: str,
+    highlight_keys: set[tuple[str, str]] | None = None,
+) -> None:
+    moment = workbook_service._now()
+    highlighted = highlight_keys or set()
+    stored = {
+        (cell.parameter_key, cell.column_key): cell
+        for cell in session.query(Cell).filter(Cell.workbook_id == main.id)
+    }
+    for key, text in values.items():
+        cell = stored.get(key)
+        if cell is None:
+            cell = workbook_service.get_or_create_cell(session, main, key[0], key[1])
+            stored[key] = cell
+        if cell.unified:
+            continue
+        cell.value = text or None
+        cell.draft_value = None
+        cell.status = "initial" if text else "empty"
+        cell.excel_highlight = key in highlighted
+        cell.updated_by = username
+        cell.updated_at = moment
+    main.show_change_highlight = True
+    session.flush()
+
+
 def record_excel_journal(
     session: Session,
     sheets: list[Workbook],
@@ -246,94 +280,111 @@ def record_excel_journal(
     columns_present: list[set[str]],
     username: str,
 ) -> int:
-    if len(sheets) < 2:
+    if not sheets:
         return 0
-    primary = workbook_service.primary_sheet(sheets[0])
-    primary_rows = session.query(Cell).filter(Cell.workbook_id == primary.id).all()
-    primary_values = {(cell.parameter_key, cell.column_key): cell.value or "" for cell in primary_rows}
-    primary_authors = {(cell.parameter_key, cell.column_key): cell.updated_by for cell in primary_rows}
     names = [sheet.sheet_name for sheet in sheets]
     moment = workbook_service._now()
     highlighted = 0
+    running: dict[tuple[str, str], str] = {}
+    main_highlight: set[tuple[str, str]] = set()
+    main = workbook_service.working_sheet(sheets[0])
+    main_stored = {
+        (cell.parameter_key, cell.column_key): cell
+        for cell in session.query(Cell).filter(Cell.workbook_id == main.id)
+    }
     for index, sheet in enumerate(sheets):
-        if sheet.is_primary:
-            continue
-        keys: set[tuple[str, str]] = set(primary_values)
-        for grid in grids[: index + 1]:
-            keys.update(grid)
+        stamp = moment + timedelta(seconds=index)
+        keys: set[tuple[str, str]] = set(running)
+        keys.update(grids[index])
+        for parameter_key in parameters_present[index]:
+            for column_key in columns_present[index]:
+                keys.add((parameter_key, column_key))
         stored = {
             (cell.parameter_key, cell.column_key): cell
             for cell in session.query(Cell).filter(Cell.workbook_id == sheet.id)
         }
+        next_running = dict(running)
+        changed_keys: set[tuple[str, str]] = set()
         for key in keys:
-            running = primary_values.get(key, "")
-            changes: list[tuple[int, str, str]] = []
-            for step in range(index + 1):
-                value = _sheet_value(grids[step], parameters_present[step], columns_present[step], key, running)
-                if value != running:
-                    changes.append((step, running, value))
-                    running = value
-            if running == primary_values.get(key, "") or not changes:
-                continue
+            previous = running.get(key, "")
+            value = _sheet_value(grids[index], parameters_present[index], columns_present[index], key, previous)
+            next_running[key] = value
+            if value != previous:
+                changed_keys.add(key)
+        for key, value in next_running.items():
             cell = stored.get(key)
             if cell is None:
                 cell = workbook_service.get_or_create_cell(session, sheet, key[0], key[1])
                 stored[key] = cell
             if cell.unified:
                 continue
-            cell.value = running or None
+            cell.value = value or None
             cell.draft_value = None
-            cell.status = "initial" if running else "empty"
-            cell.excel_highlight = True
+            cell.status = "initial" if value else "empty"
+            cell.excel_highlight = False
             cell.updated_by = username
-            cell.updated_at = moment
-            _append_excel_history(
-                session,
-                cell,
-                key,
-                primary_values.get(key, ""),
-                primary_authors.get(key),
-                changes,
-                names,
-                username,
-                moment,
-            )
-            highlighted += 1
+            cell.updated_at = stamp
+            if key in changed_keys:
+                previous = running.get(key, "")
+                _append_period_history(
+                    session,
+                    cell,
+                    previous,
+                    value,
+                    names[index],
+                    username,
+                    stamp,
+                    unique=True,
+                )
+                main_cell = main_stored.get(key)
+                if main_cell is None:
+                    main_cell = workbook_service.get_or_create_cell(session, main, key[0], key[1])
+                    main_stored[key] = main_cell
+                if not main_cell.unified:
+                    _append_period_history(
+                        session,
+                        main_cell,
+                        previous,
+                        value,
+                        names[index],
+                        username,
+                        stamp,
+                        unique=False,
+                    )
+                if index > 0:
+                    main_highlight.add(key)
+                highlighted += 1
+        running = next_running
         session.flush()
-        workbook_service.compact_sheet(session, sheet)
+        workbook_service.freeze_as_issued(sheet)
+        session.flush()
+    apply_slice_to_main(session, main, running, username, main_highlight if len(sheets) > 1 else set())
+    workbook_service.order_project_sheets(workbook_service.list_sheet_workbooks(session, main))
+    session.flush()
     return highlighted
 
 
-def _append_excel_history(
+def _append_period_history(
     session: Session,
     cell: Cell,
-    key: tuple[str, str],
-    primary_value: str,
-    primary_author: str | None,
-    changes: list[tuple[int, str, str]],
-    names: list[str],
+    old_value: str,
+    new_value: str,
+    sheet_name: str,
     username: str,
     moment,
+    *,
+    unique: bool = True,
 ) -> None:
-    del key
-    already = session.query(CellChange.id).filter(CellChange.cell_id == cell.id).first()
-    if already:
+    if unique and session.query(CellChange.id).filter(CellChange.cell_id == cell.id).first():
         return
-    entries: list[tuple[str | None, str | None, str, str]] = []
-    if primary_value:
-        entries.append((None, primary_value, workbook_service.PRIMARY_ORIGIN_COMMENT, primary_author or "Основной лист"))
-    for step, old, new in changes:
-        entries.append((old or None, new or None, workbook_service.excel_sheet_comment(names[step]), username))
-    start = moment - timedelta(seconds=len(entries))
-    for offset, (old, new, comment, author) in enumerate(entries):
-        session.add(
-            CellChange(
-                id=workbook_service._new_id(),
-                cell_id=cell.id,
-                author=author,
-                created_at=start + timedelta(seconds=offset),
-                old_value=old,
-                new_value=new,
-                comment=comment,
-            )
+    session.add(
+        CellChange(
+            id=workbook_service._new_id(),
+            cell_id=cell.id,
+            author=username,
+            created_at=moment,
+            old_value=old_value or None,
+            new_value=new_value or None,
+            comment=workbook_service.excel_sheet_comment(sheet_name),
         )
+    )

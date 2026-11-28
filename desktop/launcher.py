@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from src.app_info import APP_VERSION
+
 
 def _version_key(name: str) -> tuple[int, ...] | None:
     parts: list[int] = []
@@ -27,22 +29,17 @@ def _app_exe(here: Path | None = None) -> Path:
             key = _version_key(folder.name)
             if key is None:
                 continue
-            for path in (folder / "GrandSummary" / "GrandSummary.exe", folder / "GrandSummary.exe"):
+            for path in (folder / "GrandSummary.exe", folder / "GrandSummary" / "GrandSummary.exe"):
                 if path.is_file():
                     found.append((key, path))
                     break
     found.sort(key=lambda item: item[0], reverse=True)
     candidates = [path for _, path in found]
-    candidates.extend(
-        [
-            here / "releases" / "GrandSummary" / "GrandSummary.exe",
-            here / "GrandSummary" / "GrandSummary.exe",
-        ]
-    )
+    candidates.append(here / "GrandSummary.exe")
     for path in candidates:
         if path.is_file():
             return path
-    return candidates[0] if candidates else here / "releases" / "GrandSummary" / "GrandSummary.exe"
+    return candidates[0] if candidates else here / "releases" / APP_VERSION / "GrandSummary.exe"
 
 
 def _here() -> Path:
@@ -110,9 +107,9 @@ def _install_launcher(app_root: Path) -> None:
 
 
 def _start(exe: Path) -> None:
-    from src.app_info import local_app_root
+    from src.paths import default_working_data_dir
 
-    os.environ.setdefault("GRAND_SUMMARY_DATA_DIR", str(local_app_root() / "data"))
+    os.environ.setdefault("GRAND_SUMMARY_DATA_DIR", str(default_working_data_dir()))
     os.chdir(str(exe.parent))
     raise SystemExit(subprocess.call([str(exe), *sys.argv[1:]]))
 

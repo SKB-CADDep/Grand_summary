@@ -137,6 +137,41 @@ def test_object_list_skips_rows_absent_from_catalog(client):
     assert names == ["ТЭЦ-1 (ст.3) К-200 (зав.T-101)"]
 
 
+def test_object_list_marks_workbook_even_if_object_row_was_recreated(client):
+    from backend.database import SessionLocal
+    from backend.models import ObjectItem, Workbook
+
+    catalog_id = client.get("/api/objects").json()[0]["id"]
+    session = SessionLocal()
+    try:
+        session.add(
+            ObjectItem(
+                id="duplicate-catalog-object",
+                name="ТЭЦ-1 (ст.3) К-200 (зав.T-101)",
+                external_id="101",
+                station="ТЭЦ-1",
+                turbine="К-200",
+                status="active",
+            )
+        )
+        session.add(
+            Workbook(
+                id="shared-summary",
+                object_id="duplicate-catalog-object",
+                created_by="tester",
+                is_primary=True,
+            )
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    listed = client.get("/api/objects").json()
+    assert listed[0]["id"] == catalog_id
+    assert listed[0]["has_workbook"] is True
+    assert listed[0]["workbook_id"] == "shared-summary"
+
+
 def test_objects_loaded_from_shared_catalog(client):
     response = client.get("/api/objects")
     assert response.status_code == 200
@@ -169,19 +204,17 @@ def test_create_object_does_not_change_catalog_file(client):
     assert "ТЭЦ-2 (ст.5) К-300 (зав.T-202)" not in names
 
 
-def test_default_database_paths_use_fileserver(monkeypatch):
+def test_default_catalog_paths_use_the_work_folder(monkeypatch):
     monkeypatch.delenv("GRAND_SUMMARY_OBJECTS_FILE", raising=False)
     monkeypatch.delenv("GRAND_SUMMARY_OBJECTS_DIR", raising=False)
     monkeypatch.delenv("GRAND_SUMMARY_MATERIALS_DIR", raising=False)
-    from src.paths import materials_database_dir, objects_database_dir, objects_database_path
+    monkeypatch.delenv("GRAND_SUMMARY_DATA_DIR", raising=False)
+    from src.paths import materials_database_dir, objects_database_dir, objects_database_path, work_root
 
-    base = Path(
-        r"\\fileserver\УТЗ\10 Служба технического директора\05 СКБт\ОАП\1. Проекты\Grand summary\Временное бд"
-    )
-    objects_dir = base / "временно бд объектов для тестов"
-    assert objects_database_dir() == objects_dir
-    assert objects_database_path() == objects_dir / "projects.json"
-    assert materials_database_dir() == base / "Библиотека материалов"
+    root = work_root()
+    assert objects_database_dir() == root / "временно бд объектов для тестов"
+    assert objects_database_path() == root / "временно бд объектов для тестов" / "projects.json"
+    assert materials_database_dir() == root / "Библиотека материалов"
 
 
 def test_relative_database_overrides_use_project_root(tmp_path, monkeypatch):
@@ -700,7 +733,7 @@ def test_report_preview_and_docx(client):
 
     client.post(
         f"/api/workbooks/{workbook_id}/cells/r010/s1/confirm",
-        json={"value": "160"},
+        json={"value": "160", "comment": "Следующая правка"},
     )
     automatic_preview = client.get(
         f"/api/workbooks/{workbook_id}/report-preview",
@@ -749,7 +782,10 @@ def test_export_report_table_docx(client):
     document = Document(BytesIO(response.content))
     section = document.sections[0]
     assert section.page_width > section.page_height
+    assert abs(section.page_width.mm - 420) < 1
+    assert abs(section.page_height.mm - 297) < 1
     table = document.tables[0]
+    assert len(document.tables) == 1
     assert [cell.text for cell in table.rows[0].cells[:4]] == [
         "Наименование параметра",
         "Обозначение",
@@ -779,6 +815,104 @@ def test_export_report_table_docx(client):
     )
     assert "Таблица 7 – Данные по направляющим лопаткам и диафрагмам ступеней ЦСД турбины К-200 ТЭЦ-1 (T-101)" in document_text
     assert "(L')" not in height.cells[0].text
+
+
+def test_report_notes_are_numbered_by_creation_and_exported(client):
+    from docx import Document
+
+    objects = client.get("/api/objects").json()
+    workbook_id = client.post("/api/workbooks", json={"object_id": objects[0]["id"]}).json()["id"]
+    sheet_id = client.post(f"/api/workbooks/{workbook_id}/sheets", json={"name": "Лист ИД"}).json()["id"]
+    first = client.post(
+        f"/api/workbooks/{sheet_id}/report-notes",
+        json={"parameter_key": "r010", "column_key": "s2", "text": "Первое примечание"},
+    )
+    second = client.post(
+        f"/api/workbooks/{sheet_id}/report-notes",
+        json={"parameter_key": "r010", "column_key": "s1", "text": "Второе примечание"},
+    )
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    notes = second.json()
+    assert [(item["number"], item["text"]) for item in notes] == [
+        (1, "Первое примечание"),
+        (2, "Второе примечание"),
+    ]
+    payload = client.get(f"/api/workbooks/{sheet_id}").json()
+    assert payload["report_notes"][0]["number"] == 1
+    response = client.post(
+        f"/api/workbooks/{sheet_id}/export-report-table",
+        json={
+            "selected_parameter_keys": ["r010"],
+            "selected_column_keys": ["s1", "s2"],
+            "table_number": 1,
+        },
+    )
+    assert response.status_code == 200, response.text
+    document = Document(BytesIO(response.content))
+    height = next(row for row in document.tables[0].rows if "Высота сопловой лопатки" in row.cells[0].text)
+    assert "*" in height.cells[3].text
+    xml = height.cells[3]._tc.xml
+    assert "superscript" in xml
+    captions = [paragraph.text for paragraph in document.paragraphs]
+    assert "*1 Первое примечание" in captions
+    assert "*2 Второе примечание" in captions
+    only_s1 = client.post(
+        f"/api/workbooks/{sheet_id}/export-report-table",
+        json={
+            "selected_parameter_keys": ["r010"],
+            "selected_column_keys": ["s1"],
+            "table_number": 1,
+        },
+    )
+    only_doc = Document(BytesIO(only_s1.content))
+    only_captions = [paragraph.text for paragraph in only_doc.paragraphs]
+    assert "*2 Второе примечание" in only_captions
+    assert "*1 Первое примечание" not in only_captions
+
+
+def test_export_report_table_docx_splits_wide_stage_tables(client):
+    from docx import Document
+
+    from src.services.report_generation import _max_stage_columns
+
+    objects = client.get("/api/objects").json()
+    workbook_id = client.post("/api/workbooks", json={"object_id": objects[0]["id"]}).json()["id"]
+    sheet_id = client.post(f"/api/workbooks/{workbook_id}/sheets", json={"name": "Лист ИД"}).json()["id"]
+    extra_needed = _max_stage_columns() + 3
+    column_keys = ["s1"]
+    for index in range(extra_needed):
+        added = client.post(
+            f"/api/workbooks/{sheet_id}/stages",
+            json={"label": f"ст.{index + 40}"},
+        )
+        assert added.status_code == 200, added.text
+        column_keys.append(added.json()["key"])
+    response = client.post(
+        f"/api/workbooks/{sheet_id}/export-report-table",
+        json={
+            "selected_parameter_keys": ["r010"],
+            "selected_column_keys": column_keys,
+            "table_number": 7,
+        },
+    )
+    assert response.status_code == 200, response.text
+    document = Document(BytesIO(response.content))
+    assert len(document.tables) >= 2
+    seen_labels: list[str] = []
+    for table in document.tables:
+        header = [cell.text for cell in table.rows[0].cells]
+        assert header[:3] == ["Наименование параметра", "Обозначение", "Ед. изм."]
+        seen_labels.extend(header[3:])
+        height = next(row for row in table.rows[1:] if row.cells[0].text == "Высота сопловой лопатки")
+        assert height.cells[1].text == "L'"
+        assert height.cells[2].text == "мм"
+    assert seen_labels[0] == "1"
+    assert seen_labels.count("1") == 1
+    assert f"ст.{extra_needed + 39}" in seen_labels
+    captions = [paragraph.text for paragraph in document.paragraphs]
+    assert any("Таблица 7 –" in text for text in captions)
+    assert "Продолжение таблицы 7" in captions
 
 
 def _workbook_id(client) -> str:
@@ -1117,6 +1251,77 @@ def test_notification_on_other_author_confirm(client):
     assert marked.json()["read"] is True
 
 
+def test_notification_settings_can_mute_object_and_my_cells(client):
+    workbook_id = _workbook_id(client)
+    book = client.get(f"/api/workbooks/{workbook_id}").json()
+    object_id = book["object"]["id"]
+    first = client.post(
+        f"/api/workbooks/{workbook_id}/cells/r010/s1/confirm",
+        json={"value": "100", "comment": "Иван"},
+        headers={"X-Remote-User": "ivan"},
+    )
+    assert first.status_code == 200
+    settings = client.get("/api/notification-settings", headers={"X-Remote-User": "ivan"}).json()
+    assert settings["watch_my_cells"] is True
+    object_row = next(item for item in settings["objects"] if item["object_id"] == object_id)
+    object_row["enabled"] = False
+    saved = client.put(
+        "/api/notification-settings",
+        json={"watch_my_cells": True, "objects": settings["objects"]},
+        headers={"X-Remote-User": "ivan"},
+    )
+    assert saved.status_code == 200, saved.text
+    muted = client.post(
+        f"/api/workbooks/{workbook_id}/cells/r010/s1/confirm",
+        json={"value": "110", "comment": "Пётр"},
+        headers={"X-Remote-User": "petr"},
+    )
+    assert muted.status_code == 200
+    assert client.get("/api/notifications", headers={"X-Remote-User": "ivan"}).json() == []
+
+    object_row["enabled"] = True
+    object_row["watch_my_cells"] = False
+    client.put(
+        "/api/notification-settings",
+        json={"watch_my_cells": False, "objects": settings["objects"]},
+        headers={"X-Remote-User": "ivan"},
+    )
+    again = client.post(
+        f"/api/workbooks/{workbook_id}/cells/r010/s1/confirm",
+        json={"value": "120", "comment": "Пётр ещё раз"},
+        headers={"X-Remote-User": "petr"},
+    )
+    assert again.status_code == 200
+    assert client.get("/api/notifications", headers={"X-Remote-User": "ivan"}).json() == []
+
+    watcher = client.put(
+        "/api/notification-settings",
+        json={
+            "watch_my_cells": False,
+            "objects": [
+                {
+                    "object_id": object_id,
+                    "object_name": book["object"]["name"],
+                    "enabled": True,
+                    "watch_my_cells": False,
+                    "watch_all_cells": True,
+                }
+            ],
+        },
+        headers={"X-Remote-User": "maria"},
+    )
+    assert watcher.status_code == 200, watcher.text
+    watched = client.post(
+        f"/api/workbooks/{workbook_id}/cells/r010/s1/confirm",
+        json={"value": "130", "comment": "Пётр для Марии"},
+        headers={"X-Remote-User": "petr"},
+    )
+    assert watched.status_code == 200
+    maria_notes = client.get("/api/notifications", headers={"X-Remote-User": "maria"}).json()
+    assert maria_notes
+    assert maria_notes[0]["author"] == "petr"
+
+
 def test_acl_forbidden(client, tmp_path, monkeypatch):
     acl_file = tmp_path / "acl.json"
     acl_file.write_text('{"editors": ["boss"], "readers": ["guest"]}', encoding="utf-8")
@@ -1243,7 +1448,8 @@ def test_import_excel_from_child_sheet(client, tmp_path):
     assert imported.status_code == 200
     result = imported.json()
     active = next(sheet for sheet in result["sheets"] if sheet["id"] == result["active_sheet_id"])
-    assert active["name"] == "Sheet"
+    assert active["name"] == "Основная таблица"
+    assert active["is_primary"] is True
     assert client.get(f"/api/workbooks/{active['id']}").status_code == 200
 
 
@@ -1270,9 +1476,24 @@ def test_import_excel_sheets_and_copy(client):
     assert imported.status_code == 200
     result = imported.json()
     assert result["imported"] == 4
-    assert [sheet["name"] for sheet in result["sheets"]] == ["Основные данные", "Дополнительные данные"]
+    assert [sheet["name"] for sheet in result["sheets"]] == [
+        "Основная таблица",
+        "Основные данные",
+        "Дополнительные данные",
+    ]
+    main, first_issued, second_issued = result["sheets"]
+    assert main["is_primary"] is True
+    assert first_issued["is_issued"] is True
+    assert second_issued["is_issued"] is True
 
-    first_id, second_id = (sheet["id"] for sheet in result["sheets"])
+    first_id, second_id = first_issued["id"], second_issued["id"]
+    main_cells = {
+        (cell["parameter_key"], cell["column_key"]): cell
+        for cell in client.get(f"/api/workbooks/{main['id']}").json()["cells"]
+    }
+    assert main_cells[("r010", "s1")]["value"] == "130"
+    assert main_cells[("r010", "s1")]["excel_highlight"] is True
+    assert main_cells[("r010", "s2")]["excel_highlight"] is True
     first_data = client.get(f"/api/workbooks/{first_id}").json()
     first_cells = {(cell["parameter_key"], cell["column_key"]): cell for cell in first_data["cells"]}
     assert first_cells[("r010", "s1")]["value"] == "120"
@@ -1337,17 +1558,54 @@ def test_excel_sheets_become_change_journal_and_orange_can_be_cleared(client):
     )
     assert imported.status_code == 200, imported.text
     result = imported.json()
-    assert result["journaled"] == 4
-    assert [sheet["name"] for sheet in result["sheets"]] == ["Основной", "15.03.2026", "01.04.2026"]
-    primary_id, middle_id, last_id = (sheet["id"] for sheet in result["sheets"])
+    assert result["journaled"] == 6
+    assert [sheet["name"] for sheet in result["sheets"]] == [
+        "Основная таблица",
+        "Основной",
+        "15.03.2026",
+        "01.04.2026",
+    ]
+    main, first_issued, middle, last = result["sheets"]
+    assert main["is_primary"] is True
+    assert first_issued["is_issued"] is True
+    assert middle["is_issued"] is True
+    assert last["is_issued"] is True
+    primary_id, middle_id, last_id = first_issued["id"], middle["id"], last["id"]
 
     primary_cells = {
         (cell["parameter_key"], cell["column_key"]): cell
+        for cell in client.get(f"/api/workbooks/{main['id']}").json()["cells"]
+    }
+    assert primary_cells[("r010", "s1")]["value"] == "140"
+    assert primary_cells[("r010", "s1")]["excel_highlight"] is True
+    assert primary_cells[("r010", "s2")]["excel_highlight"] is True
+    assert primary_cells[("r007", "s1")]["excel_highlight"] is True
+    hidden = client.patch(
+        f"/api/workbooks/{main['id']}/sheets/{main['id']}/change-highlight",
+        json={"enabled": False},
+    )
+    assert hidden.status_code == 200, hidden.text
+    assert next(item["show_change_highlight"] for item in hidden.json()["sheets"] if item["id"] == main["id"]) is False
+    shown = client.patch(
+        f"/api/workbooks/{main['id']}/sheets/{main['id']}/change-highlight",
+        json={"enabled": True},
+    )
+    assert shown.status_code == 200
+    assert next(item["show_change_highlight"] for item in shown.json()["sheets"] if item["id"] == main["id"]) is True
+    main_history = client.get(f"/api/workbooks/{main['id']}/cells/r010/s1/history").json()
+    assert [item["comment"] for item in main_history] == [
+        "Изменение листа «Основной»",
+        "Изменение листа «15.03.2026»",
+        "Изменение листа «01.04.2026»",
+    ]
+    assert [item["new_value"] for item in main_history] == ["120", "130", "140"]
+
+    first_cells = {
+        (cell["parameter_key"], cell["column_key"]): cell
         for cell in client.get(f"/api/workbooks/{primary_id}").json()["cells"]
     }
-    assert primary_cells[("r010", "s1")]["value"] == "120"
-    assert primary_cells[("r010", "s1")]["excel_highlight"] is False
-    assert client.get(f"/api/workbooks/{primary_id}/cells/r010/s1/history").json() == []
+    assert first_cells[("r010", "s1")]["value"] == "120"
+    assert first_cells[("r010", "s1")]["excel_highlight"] is False
 
     middle_cells = {
         (cell["parameter_key"], cell["column_key"]): cell
@@ -1355,36 +1613,28 @@ def test_excel_sheets_become_change_journal_and_orange_can_be_cleared(client):
     }
     assert middle_cells[("r010", "s1")]["value"] == "130"
     assert middle_cells[("r010", "s1")]["status"] == "initial"
-    assert middle_cells[("r010", "s1")]["excel_highlight"] is True
+    assert middle_cells[("r010", "s1")]["excel_highlight"] is False
     assert middle_cells[("r010", "s2")]["value"] == "125"
     assert middle_cells[("r010", "s2")]["excel_highlight"] is False
     middle_history = client.get(f"/api/workbooks/{middle_id}/cells/r010/s1/history").json()
-    assert [item["comment"] for item in middle_history] == [
-        "Данные из основного листа",
-        "Изменение листа «15.03.2026»",
-    ]
-    assert middle_history[0]["new_value"] == "120"
-    assert middle_history[0]["old_value"] is None
-    assert middle_history[1]["old_value"] == "120"
-    assert middle_history[1]["new_value"] == "130"
+    assert [item["comment"] for item in middle_history] == ["Изменение листа «15.03.2026»"]
+    assert middle_history[0]["old_value"] == "120"
+    assert middle_history[0]["new_value"] == "130"
 
     last_cells = {
         (cell["parameter_key"], cell["column_key"]): cell
         for cell in client.get(f"/api/workbooks/{last_id}").json()["cells"]
     }
     assert last_cells[("r010", "s1")]["value"] == "140"
-    assert last_cells[("r010", "s1")]["excel_highlight"] is True
+    assert last_cells[("r010", "s1")]["excel_highlight"] is False
     assert last_cells[("r010", "s2")]["value"] in {None, ""}
-    assert last_cells[("r010", "s2")]["excel_highlight"] is True
+    assert last_cells[("r010", "s2")]["excel_highlight"] is False
     assert last_cells[("r007", "s1")]["value"] == "15"
-    assert last_cells[("r007", "s1")]["excel_highlight"] is True
+    assert last_cells[("r007", "s1")]["excel_highlight"] is False
     last_history = client.get(f"/api/workbooks/{last_id}/cells/r010/s1/history").json()
-    assert [item["comment"] for item in last_history] == [
-        "Данные из основного листа",
-        "Изменение листа «15.03.2026»",
-        "Изменение листа «01.04.2026»",
-    ]
-    assert [item["new_value"] for item in last_history] == ["120", "130", "140"]
+    assert [item["comment"] for item in last_history] == ["Изменение листа «01.04.2026»"]
+    assert last_history[0]["old_value"] == "130"
+    assert last_history[0]["new_value"] == "140"
     angle_history = client.get(f"/api/workbooks/{last_id}/cells/r007/s1/history").json()
     assert [item["comment"] for item in angle_history] == ["Изменение листа «01.04.2026»"]
     assert angle_history[0]["old_value"] is None
@@ -1392,15 +1642,21 @@ def test_excel_sheets_become_change_journal_and_orange_can_be_cleared(client):
 
     cleared = client.post(f"/api/workbooks/{last_id}/clear-excel-highlight")
     assert cleared.status_code == 200, cleared.text
-    assert cleared.json()["cleared"] == 4
+    assert cleared.json()["cleared"] == 3
     refreshed = {
         (cell["parameter_key"], cell["column_key"]): cell
         for cell in client.get(f"/api/workbooks/{last_id}").json()["cells"]
     }
+    main_after = {
+        (cell["parameter_key"], cell["column_key"]): cell
+        for cell in client.get(f"/api/workbooks/{main['id']}").json()["cells"]
+    }
+    assert main_after[("r010", "s1")]["value"] == "140"
+    assert main_after[("r010", "s1")]["excel_highlight"] is False
+    assert main_after[("r010", "s2")]["excel_highlight"] is False
+    assert main_after[("r007", "s1")]["excel_highlight"] is False
     assert refreshed[("r010", "s1")]["value"] == "140"
     assert refreshed[("r010", "s1")]["excel_highlight"] is False
-    assert refreshed[("r010", "s2")]["excel_highlight"] is False
-    assert refreshed[("r007", "s1")]["excel_highlight"] is False
     kept = client.get(f"/api/workbooks/{last_id}/cells/r010/s1/history").json()
     assert [item["comment"] for item in kept] == [item["comment"] for item in last_history]
     middle_after = {
@@ -1409,6 +1665,70 @@ def test_excel_sheets_become_change_journal_and_orange_can_be_cleared(client):
     }
     assert middle_after[("r010", "s1")]["excel_highlight"] is False
     assert middle_after[("r010", "s1")]["value"] == "130"
+
+
+def test_history_compare_uses_tabs_range_and_or(client):
+    excel = Workbook()
+    first = excel.active
+    first.title = "Основной"
+    first.append(["Наименование параметра", "1"])
+    first.append(["Высота сопловой лопатки, мм", 120])
+    second = excel.create_sheet("15.03.2026")
+    second.append(["Наименование параметра", "1"])
+    second.append(["Высота сопловой лопатки, мм", 130])
+    third = excel.create_sheet("01.04.2026")
+    third.append(["Наименование параметра", "1"])
+    third.append(["Высота сопловой лопатки, мм", 140])
+    content = BytesIO()
+    excel.save(content)
+    content.seek(0)
+    workbook_id = _workbook_id(client)
+    imported = client.post(
+        f"/api/workbooks/{workbook_id}/import-excel",
+        files={"file": ("compare.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert imported.status_code == 200, imported.text
+    main, first_issued, middle, last = imported.json()["sheets"]
+    compared = client.post(
+        f"/api/workbooks/{main['id']}/cells/r010/s1/compare",
+        json={"sheet_ids": [first_issued["id"]], "range_from": middle["id"], "range_to": last["id"], "combine": "or"},
+    )
+    assert compared.status_code == 200, compared.text
+    payload = compared.json()
+    assert payload["current"]["value"] == "140"
+    assert [item["sheet_name"] for item in payload["targets"]] == ["Основной", "15.03.2026", "01.04.2026"]
+    assert [item["value"] for item in payload["targets"]] == ["120", "130", "140"]
+    assert [item["differs"] for item in payload["targets"]] == [True, True, False]
+    assert payload["differs_any"] is True
+    assert payload["differs_all"] is False
+
+    unioned = client.post(
+        f"/api/workbooks/{main['id']}/cells/r010/s1/compare",
+        json={"sheet_ids": [first_issued["id"]], "range_from": middle["id"], "range_to": last["id"], "combine": "and"},
+    )
+    assert [item["sheet_name"] for item in unioned.json()["targets"]] == ["Основной", "15.03.2026", "01.04.2026"]
+
+    ranged = client.post(
+        f"/api/workbooks/{last['id']}/cells/r010/s1/compare",
+        json={"sheet_ids": [], "range_from": first_issued["id"], "range_to": middle["id"], "combine": "or"},
+    )
+    assert [item["sheet_name"] for item in ranged.json()["targets"]] == ["Основной", "15.03.2026"]
+    assert ranged.json()["current"]["value"] == "140"
+
+    sheet_view = client.post(
+        f"/api/workbooks/{main['id']}/compare-sheet",
+        json={"sheet_ids": [first_issued["id"], middle["id"]], "combine": "or"},
+    )
+    assert sheet_view.status_code == 200, sheet_view.text
+    view = sheet_view.json()
+    assert [item["sheet_name"] for item in view["targets"]] == ["Основной", "15.03.2026"]
+    cells = {
+        (cell["parameter_key"], cell["column_key"]): cell for cell in view["workbook"]["cells"]
+    }
+    assert cells[("r010", "s1")]["value"] == "140"
+    assert cells[("r010", "s1")]["compare_highlight"] is True
+    assert cells[("r010", "s1")]["excel_highlight"] is False
+    assert {item["value"] for item in cells[("r010", "s1")]["compare_against"]} == {"120", "130"}
 
 
 def test_other_sheet_inherits_unchanged_primary_cells(client):
@@ -1572,13 +1892,35 @@ def test_issued_sheet_is_frozen_and_its_copy_hides_old_changes(client):
         json={"issued": True},
     )
     assert blocked_primary.status_code == 400
+    main_highlight = client.patch(
+        f"/api/workbooks/{primary_id}/sheets/{primary_id}/change-highlight",
+        json={"enabled": False},
+    )
+    assert main_highlight.status_code == 200, main_highlight.text
+    assert next(
+        item["show_change_highlight"] for item in main_highlight.json()["sheets"] if item["id"] == primary_id
+    ) is False
 
     issued = client.patch(
         f"/api/workbooks/{primary_id}/sheets/{journal_id}/issued",
-        json={"issued": True},
+        json={"issued": True, "issued_kind": "final"},
     )
     assert issued.status_code == 200, issued.text
-    assert next(item["is_issued"] for item in issued.json()["sheets"] if item["id"] == journal_id)
+    issued_sheet = next(item for item in issued.json()["sheets"] if item["id"] == journal_id)
+    assert issued_sheet["is_issued"] is True
+    assert issued_sheet["issued_kind"] == "final"
+    assert issued_sheet["show_change_highlight"] is False
+    updated_kind = client.patch(
+        f"/api/workbooks/{primary_id}/sheets/{journal_id}/issued",
+        json={"issued": True, "issued_kind": "update"},
+    )
+    assert updated_kind.status_code == 200, updated_kind.text
+    assert next(item["issued_kind"] for item in updated_kind.json()["sheets"] if item["id"] == journal_id) == "update"
+    blocked_issued_highlight = client.patch(
+        f"/api/workbooks/{primary_id}/sheets/{journal_id}/change-highlight",
+        json={"enabled": True},
+    )
+    assert blocked_issued_highlight.status_code == 400
     frozen = {(cell["parameter_key"], cell["column_key"]): cell for cell in client.get(f"/api/workbooks/{journal_id}").json()["cells"]}
     assert frozen[("r010", "s1")]["value"] == "130"
     assert frozen[("r010", "s2")]["value"] == "125"
@@ -1610,7 +1952,9 @@ def test_issued_sheet_is_frozen_and_its_copy_hides_old_changes(client):
         json={"issued": False},
     )
     assert cleared.status_code == 200, cleared.text
-    assert client.get(f"/api/workbooks/{journal_id}").json()["is_issued"] is False
+    cleared_sheet = client.get(f"/api/workbooks/{journal_id}").json()
+    assert cleared_sheet["is_issued"] is False
+    assert cleared_sheet["issued_kind"] == ""
 
 
 def test_import_excel_rejects_xls(client):
@@ -1655,7 +1999,10 @@ def test_delete_sheet_preserves_primary_sheet_and_allows_reimport(client, tmp_pa
     assert imported.status_code == 200
     assert imported.json()["active_sheet_id"] == primary["id"]
     assert client.get(f"/api/workbooks/{workbook_id}").status_code == 200
-    assert [sheet["id"] for sheet in client.get(f"/api/workbooks/{workbook_id}/sheets").json()] == [primary["id"]]
+    sheets = client.get(f"/api/workbooks/{workbook_id}/sheets").json()
+    assert sheets[0]["id"] == primary["id"]
+    assert sheets[0]["is_primary"] is True
+    assert any(sheet["is_issued"] for sheet in sheets[1:])
 
 
 def test_delete_root_sheet_promotes_remaining_sheet(client):
@@ -1670,29 +2017,22 @@ def test_delete_root_sheet_promotes_remaining_sheet(client):
         json={"name": "Ещё один лист"},
     ).json()
 
-    last_only = client.delete(f"/api/workbooks/{workbook_id}/sheets/{workbook_id}")
-    assert last_only.status_code == 200
-    payload = last_only.json()
-    assert payload["active_sheet_id"] == copied["id"]
-    assert [sheet["id"] for sheet in payload["sheets"]] == [copied["id"], extra["id"]]
-    assert client.get(f"/api/workbooks/{root['id']}").status_code == 404
-    assert client.get(f"/api/workbooks/{copied['id']}").json()["parent_workbook_id"] is None
-    assert client.get(f"/api/workbooks/{extra['id']}").json()["parent_workbook_id"] == copied["id"]
+    blocked_main = client.delete(f"/api/workbooks/{workbook_id}/sheets/{workbook_id}")
+    assert blocked_main.status_code == 400
+    assert "Основную таблицу нельзя удалить" in blocked_main.json()["detail"]
 
-    reopened = client.post("/api/workbooks", json={"object_id": root["object_id"]})
-    assert reopened.status_code == 200
-    assert reopened.json()["id"] == copied["id"]
-    sheets = client.get(f"/api/workbooks/{copied['id']}/sheets").json()
-    assert [sheet["id"] for sheet in sheets] == [copied["id"], extra["id"]]
-
-    leftover = client.delete(f"/api/workbooks/{copied['id']}/sheets/{copied['id']}")
+    removed = client.delete(f"/api/workbooks/{workbook_id}/sheets/{copied['id']}")
+    assert removed.status_code == 200
+    assert removed.json()["active_sheet_id"] == workbook_id
+    assert [sheet["id"] for sheet in removed.json()["sheets"]] == [workbook_id, extra["id"]]
+    assert client.get(f"/api/workbooks/{root['id']}").status_code == 200
+    leftover = client.delete(f"/api/workbooks/{workbook_id}/sheets/{extra['id']}")
     assert leftover.status_code == 200
-    assert leftover.json()["active_sheet_id"] == extra["id"]
-    assert [sheet["id"] for sheet in leftover.json()["sheets"]] == [extra["id"]]
-
-    blocked = client.delete(f"/api/workbooks/{extra['id']}/sheets/{extra['id']}")
+    assert leftover.json()["active_sheet_id"] == workbook_id
+    assert [sheet["id"] for sheet in leftover.json()["sheets"]] == [workbook_id]
+    blocked = client.delete(f"/api/workbooks/{workbook_id}/sheets/{workbook_id}")
     assert blocked.status_code == 400
-    assert blocked.json()["detail"] == "Нельзя удалить единственный лист проекта"
+    assert "Основную таблицу нельзя удалить" in blocked.json()["detail"]
 
 
 def test_import_dated_object_workbook_after_deleting_a_sheet(client, tmp_path):
@@ -1732,7 +2072,9 @@ def test_import_dated_object_workbook_after_deleting_a_sheet(client, tmp_path):
     assert imported.status_code == 200
     result = imported.json()
     assert result["imported"] == 12
-    assert [sheet["name"] for sheet in result["sheets"]] == sheet_names
+    assert [sheet["name"] for sheet in result["sheets"]] == ["Основная таблица", *sheet_names]
+    assert result["sheets"][0]["is_primary"] is True
+    assert all(sheet["is_issued"] for sheet in result["sheets"][1:])
     assert all(client.get(f"/api/workbooks/{sheet['id']}").status_code == 200 for sheet in result["sheets"])
     assert "Протокол изменений" not in [sheet["name"] for sheet in result["sheets"]]
 
@@ -1771,6 +2113,15 @@ def test_save_project_preserves_sheet_and_draft_status(client):
     from src.services.db_backup import backup_dir, list_snapshot_dirs
 
     assert len(list_snapshot_dirs(backup_dir())) == 1
+    from src.services.db_json import json_database_path
+
+    json_copy = json_database_path()
+    assert json_copy is not None and json_copy.is_file()
+    payload = json.loads(json_copy.read_text(encoding="utf-8"))
+    assert "cells" in payload["tables"]
+    snapshot = list_snapshot_dirs(backup_dir())[0]
+    assert (snapshot / "grand_summary.db").is_file()
+    assert (snapshot / "grand_summary.json").is_file()
 
 
 def test_report_preview_uses_selected_sheet(client):
@@ -1815,7 +2166,8 @@ def test_baseline_feature_is_not_exposed_and_sheet_renaming_still_works(client):
         f"/api/workbooks/{root_id}/sheets/{root_id}/name",
         json={"name": "Переименование основного"},
     )
-    assert primary_rename.status_code == 400
+    assert primary_rename.status_code == 200
+    assert primary_rename.json()["sheet_name"] == "Переименование основного"
     duplicate = client.post(
         f"/api/workbooks/{root_id}/sheets",
         json={"name": "Еще одна копия"},
@@ -1826,11 +2178,6 @@ def test_baseline_feature_is_not_exposed_and_sheet_renaming_still_works(client):
     )
     assert duplicate_name.status_code == 400
 
-    removed_route = client.patch(
-        f"/api/workbooks/{root_id}/sheets/{root_id}/baseline",
-        json={"is_baseline": True},
-    )
-    assert removed_route.status_code == 404
     assert client.get(f"/api/workbooks/{copied['id']}/report-preview").status_code == 200
 
     reopened = client.post("/api/workbooks", json={"object_id": root["object_id"]})
@@ -1839,10 +2186,67 @@ def test_baseline_feature_is_not_exposed_and_sheet_renaming_still_works(client):
     assert all("is_baseline" not in sheet for sheet in persisted)
 
 
+def test_base_sheet_is_frozen_like_issued_and_renamed_with_date(client):
+    from datetime import datetime
+
+    root_id = _workbook_id(client)
+    journal = client.post(f"/api/workbooks/{root_id}/sheets", json={"name": "Рабочий лист"}).json()
+    saved = client.post(
+        f"/api/workbooks/{journal['id']}/cells/r010/s1/confirm",
+        json={"value": "77", "comment": "До базы"},
+    )
+    assert saved.status_code == 200, saved.text
+    history_before = client.get(f"/api/workbooks/{journal['id']}/cells/r010/s1/history").json()
+    assert [item["comment"] for item in history_before][-1] == "До базы"
+
+    assigned = client.patch(f"/api/workbooks/{root_id}/sheets/{journal['id']}/base")
+    assert assigned.status_code == 200, assigned.text
+    sheets = assigned.json()["sheets"]
+    base = next(item for item in sheets if item["is_base"])
+    today = datetime.now().strftime("%d.%m.%Y")
+    assert base["name"] == f"База ({today})"
+    assert base["is_base"] is True
+    assert base["is_primary"] is False
+    assert base["show_change_highlight"] is False
+    assert sheets[0]["id"] == root_id
+    assert sheets[1]["id"] == base["id"]
+
+    frozen = client.get(f"/api/workbooks/{base['id']}").json()
+    assert frozen["is_base"] is True
+    assert next(cell["value"] for cell in frozen["cells"] if cell["parameter_key"] == "r010" and cell["column_key"] == "s1") == "77"
+
+    denied = client.post(
+        f"/api/workbooks/{base['id']}/cells/r010/s1/confirm",
+        json={"value": "78", "comment": "После базы"},
+    )
+    assert denied.status_code == 400
+    history_after = client.get(f"/api/workbooks/{base['id']}/cells/r010/s1/history").json()
+    assert [item["comment"] for item in history_after][-1] == "До базы"
+
+    blocked_rename = client.patch(
+        f"/api/workbooks/{root_id}/sheets/{base['id']}/name",
+        json={"name": "Не база"},
+    )
+    assert blocked_rename.status_code == 400
+    blocked_delete = client.delete(f"/api/workbooks/{root_id}/sheets/{base['id']}")
+    assert blocked_delete.status_code == 400
+
+    copy = client.post(f"/api/workbooks/{journal['id']}/sheets", json={"name": "После базы"})
+    assert copy.status_code == 200, copy.text
+    assert copy.json()["is_base"] is False
+    assert copy.json()["is_issued"] is False
+    copied_cell = next(
+        cell
+        for cell in copy.json()["cells"]
+        if cell["parameter_key"] == "r010" and cell["column_key"] == "s1"
+    )
+    assert copied_cell["value"] == "77"
+
+
 def test_primary_sheet_moves_to_front_without_changing_project_root(client):
     root_id = _workbook_id(client)
     root = client.get(f"/api/workbooks/{root_id}").json()
-    assert root["sheet_name"] == "Исходные данные"
+    assert root["sheet_name"] == "Основная таблица"
     copied = client.post(
         f"/api/workbooks/{root_id}/sheets",
         json={"name": "Будущий основной"},
@@ -1865,33 +2269,80 @@ def test_primary_sheet_moves_to_front_without_changing_project_root(client):
         (root_id, False),
     ]
 
-    blocked_write = client.patch(
-        f"/api/workbooks/{copied['id']}/cells/r010/s1",
-        json={"value": "Нельзя изменить"},
-    )
-    assert blocked_write.status_code == 400
-    blocked_delete = client.delete(f"/api/workbooks/{root_id}/sheets/{copied['id']}")
-    assert blocked_delete.status_code == 400
-    blocked_rename = client.patch(
-        f"/api/workbooks/{root_id}/sheets/{copied['id']}/name",
-        json={"name": "Попытка переименования"},
-    )
-    assert blocked_rename.status_code == 400
-    blocked_triangle_sync = client.post(
-        f"/api/workbooks/{copied['id']}/sync-triangles",
-        json={"mode": "all", "cells": []},
-    )
-    assert blocked_triangle_sync.status_code == 400
-
-    demoted = client.patch(f"/api/workbooks/{root_id}/sheets/{copied['id']}/ordinary")
-    assert demoted.status_code == 200
-    assert next(sheet for sheet in demoted.json()["sheets"] if sheet["id"] == copied["id"])["is_primary"] is False
     allowed_write = client.patch(
         f"/api/workbooks/{copied['id']}/cells/r010/s1",
-        json={"value": "Изменение после снятия статуса"},
+        json={"value": "Рабочая правка"},
     )
     assert allowed_write.status_code == 200
-    assert allowed_write.json()["status"] == "draft"
+    blocked_delete = client.delete(f"/api/workbooks/{root_id}/sheets/{copied['id']}")
+    assert blocked_delete.status_code == 400
+    renamed = client.patch(
+        f"/api/workbooks/{root_id}/sheets/{copied['id']}/name",
+        json={"name": "Рабочая таблица"},
+    )
+    assert renamed.status_code == 200
+
+
+def test_issue_version_snapshots_main_and_resets_highlight(client):
+    from datetime import datetime
+
+    root_id = _workbook_id(client)
+    saved = client.post(
+        f"/api/workbooks/{root_id}/cells/r010/s1/confirm",
+        json={"value": "120", "comment": "Первая правка"},
+    )
+    assert saved.status_code == 200, saved.text
+    first = client.post(f"/api/workbooks/{root_id}/issue-version", json={"issued_kind": "preliminary"})
+    assert first.status_code == 200, first.text
+    sheets = first.json()["sheets"]
+    assert sheets[0]["id"] == root_id
+    assert sheets[0]["is_primary"] is True
+    issued = next(item for item in sheets if item["is_issued"])
+    today = datetime.now().strftime("%d.%m.%Y")
+    assert issued["name"] == today
+    assert issued["issued_kind"] == "preliminary"
+    main_cells = {
+        (cell["parameter_key"], cell["column_key"]): cell
+        for cell in client.get(f"/api/workbooks/{root_id}").json()["cells"]
+    }
+    assert main_cells[("r010", "s1")]["value"] == "120"
+    assert main_cells[("r010", "s1")]["status"] == "initial"
+    assert main_cells[("r010", "s1")]["excel_highlight"] is False
+    issued_cells = {
+        (cell["parameter_key"], cell["column_key"]): cell
+        for cell in client.get(f"/api/workbooks/{issued['id']}").json()["cells"]
+    }
+    assert issued_cells[("r010", "s1")]["value"] == "120"
+    history = client.get(f"/api/workbooks/{issued['id']}/cells/r010/s1/history").json()
+    assert [item["comment"] for item in history] == ["Первая правка"]
+    denied = client.post(
+        f"/api/workbooks/{issued['id']}/cells/r010/s1/confirm",
+        json={"value": "121", "comment": "После выдачи"},
+    )
+    assert denied.status_code == 400
+
+    second_save = client.post(
+        f"/api/workbooks/{root_id}/cells/r010/s1/confirm",
+        json={"value": "140", "comment": "После выдачи", "expected_updated_at": main_cells[("r010", "s1")]["updated_at"]},
+    )
+    assert second_save.status_code == 200, second_save.text
+    second = client.post(f"/api/workbooks/{root_id}/issue-version")
+    assert second.status_code == 200, second.text
+    issued_ids = [item["id"] for item in second.json()["sheets"] if item["is_issued"]]
+    assert len(issued_ids) == 2
+    latest_id = second.json()["issued_sheet_id"]
+    latest_history = client.get(f"/api/workbooks/{latest_id}/cells/r010/s1/history").json()
+    assert [item["comment"] for item in latest_history] == ["После выдачи"]
+    kept = client.get(f"/api/workbooks/{issued['id']}/cells/r010/s1/history").json()
+    assert [item["comment"] for item in kept] == ["Первая правка"]
+    refreshed = {
+        (cell["parameter_key"], cell["column_key"]): cell
+        for cell in client.get(f"/api/workbooks/{root_id}").json()["cells"]
+    }
+    assert refreshed[("r010", "s1")]["status"] == "initial"
+    assert refreshed[("r010", "s1")]["value"] == "140"
+    main_history = client.get(f"/api/workbooks/{root_id}/cells/r010/s1/history").json()
+    assert [item["comment"] for item in main_history] == ["Первая правка", "После выдачи"]
 
 
 def test_import_excel_matches_short_labels_and_preamble(client):

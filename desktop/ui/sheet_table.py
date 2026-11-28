@@ -103,7 +103,7 @@ class FrozenSheetTable(QTableWidget):
         self.frozen.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.frozen.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.frozen.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.frozen.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.frozen.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.frozen.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
         self.frozen.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.frozen.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)

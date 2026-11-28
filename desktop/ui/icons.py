@@ -29,18 +29,39 @@ def eye_icon() -> QIcon:
     return QIcon(pix)
 
 
-def flag_icon() -> QIcon:
+def flag_icon(color: str = "#1f5e93") -> QIcon:
     pix, painter = _pix(16)
-    painter.setPen(QPen(QColor("#1f5e93"), 1.4))
+    fill = QColor(color)
+    painter.setPen(QPen(fill, 1.4))
     painter.drawLine(QPointF(4, 2), QPointF(4, 14))
     path = QPainterPath()
     path.moveTo(4, 2.5)
     path.lineTo(13, 5.5)
     path.lineTo(4, 8.5)
     path.closeSubpath()
-    painter.fillPath(path, QColor("#1f5e93"))
+    painter.fillPath(path, fill)
     painter.end()
     return QIcon(pix)
+
+
+def orange_circle_icon() -> QIcon:
+    pix, painter = _pix(16)
+    painter.setPen(QPen(QColor("#d35400"), 1.1))
+    painter.setBrush(QColor("#f39c12"))
+    painter.drawEllipse(QRectF(3.5, 3.5, 9, 9))
+    painter.end()
+    return QIcon(pix)
+
+
+def issued_kind_icon(kind: str | None) -> QIcon:
+    from src.issued_kinds import FINAL, UPDATE, normalize_issued_kind
+
+    key = normalize_issued_kind(kind, True)
+    if key == FINAL:
+        return flag_icon("#c62828")
+    if key == UPDATE:
+        return orange_circle_icon()
+    return flag_icon("#1f5e93")
 
 
 def pencil_icon() -> QIcon:

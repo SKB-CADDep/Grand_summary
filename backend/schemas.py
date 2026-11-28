@@ -50,6 +50,10 @@ class ObjectOut(BaseModel):
     status: str
     has_workbook: bool = False
     workbook_id: str | None = None
+    workbook_updated_at: datetime | None = None
+    last_edited_by: str | None = None
+    started_by: str | None = None
+    sheet_count: int = 0
 
 
 class WorkbookCreate(BaseModel):
@@ -71,6 +75,8 @@ class CellOut(BaseModel):
     updated_by: str | None = None
     options: list[str] = []
     last_change_id: str | None = None
+    compare_highlight: bool = False
+    compare_against: list["CellCompareSheetOut"] = Field(default_factory=list)
 
 
 class CellUnificationRequest(BaseModel):
@@ -105,6 +111,30 @@ class CellChangeOut(BaseModel):
     old_value: str | None
     new_value: str | None
     comment: str
+
+
+class CellCompareRequest(BaseModel):
+    sheet_ids: list[str] = Field(default_factory=list)
+    range_from: str | None = None
+    range_to: str | None = None
+    combine: Literal["and", "or"] = "or"
+
+
+class CellCompareSheetOut(BaseModel):
+    sheet_id: str
+    sheet_name: str
+    value: str | None = None
+    differs: bool = False
+
+
+class CellCompareOut(BaseModel):
+    parameter_key: str
+    column_key: str
+    combine: Literal["and", "or"]
+    current: CellCompareSheetOut
+    targets: list[CellCompareSheetOut]
+    differs_any: bool
+    differs_all: bool
 
 
 class UnsavedCellOut(BaseModel):
@@ -176,6 +206,16 @@ class CatalogResponse(BaseModel):
     deleted_parameters: list[str] = []
 
 
+class ReportNoteOut(BaseModel):
+    id: str
+    parameter_key: str
+    column_key: str
+    text: str
+    created_at: str
+    author: str = ""
+    number: int
+
+
 class WorkbookOut(BaseModel):
     id: str
     object_id: str
@@ -184,12 +224,24 @@ class WorkbookOut(BaseModel):
     updated_at: datetime
     created_by: str
     parent_workbook_id: str | None = None
-    sheet_name: str = "Исходные данные"
+    sheet_name: str = "Основная таблица"
     sheet_order: int = 0
     is_primary: bool = False
     is_issued: bool = False
+    issued_kind: str = ""
+    is_base: bool = False
+    show_change_highlight: bool = True
     cells: list[CellOut]
     unsaved_count: int = 0
+    report_notes: list[ReportNoteOut] = Field(default_factory=list)
+
+
+class SheetCompareOut(BaseModel):
+    combine: Literal["and", "or"]
+    workbook: WorkbookOut
+    catalog: CatalogResponse
+    targets: list[CellCompareSheetOut]
+    changed_count: int = 0
 
 
 class SheetCreateRequest(BaseModel):
@@ -202,6 +254,15 @@ class SheetRenameRequest(BaseModel):
 
 class SheetIssuedRequest(BaseModel):
     issued: bool
+    issued_kind: str | None = None
+
+
+class IssueVersionRequest(BaseModel):
+    issued_kind: str = "preliminary"
+
+
+class SheetChangeHighlightRequest(BaseModel):
+    enabled: bool
 
 
 class AddStageRequest(BaseModel):
@@ -246,6 +307,12 @@ class ReportTableExportRequest(BaseModel):
     table_number: int = Field(default=1, ge=1)
 
 
+class ReportNoteCreateRequest(BaseModel):
+    parameter_key: str
+    column_key: str
+    text: str = Field(min_length=1)
+
+
 class ChangelogResponse(BaseModel):
     text: str
     app_version: str
@@ -285,6 +352,24 @@ class NotificationOut(BaseModel):
     message: str
     created_at: datetime
     read: bool
+
+
+class NotificationObjectSetting(BaseModel):
+    object_id: str
+    object_name: str = ""
+    enabled: bool = True
+    watch_my_cells: bool = True
+    watch_all_cells: bool = False
+
+
+class NotificationSettingsOut(BaseModel):
+    watch_my_cells: bool = True
+    objects: list[NotificationObjectSetting] = Field(default_factory=list)
+
+
+class NotificationSettingsIn(BaseModel):
+    watch_my_cells: bool = True
+    objects: list[NotificationObjectSetting] = Field(default_factory=list)
 
 
 class TriangleSourceCell(BaseModel):

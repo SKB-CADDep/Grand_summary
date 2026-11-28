@@ -4,7 +4,7 @@ import re
 from html import escape
 
 from PyQt6.QtCore import QEvent, QTimer, QUrl, Qt, pyqtSignal
-from PyQt6.QtGui import QAction, QBrush, QColor, QDesktopServices, QFont, QFontMetrics, QKeySequence, QShortcut
+from PyQt6.QtGui import QAction, QBrush, QColor, QDesktopServices, QFont, QFontMetrics, QKeySequence, QPalette, QShortcut
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -25,11 +25,13 @@ from PyQt6.QtWidgets import (
     QStyledItemDelegate,
     QTableWidget,
     QTableWidgetItem,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
-from desktop.ui.icons import eye_icon, flag_icon, pencil_icon
+from desktop.ui.icons import eye_icon, issued_kind_icon, pencil_icon
+from src.issued_kinds import CHOICES, issued_kind_label, normalize_issued_kind
 from desktop.ui.sheet_table import FROZEN_COLUMNS, FrozenSheetTable
 from desktop.ui.style import COMPUTED, CONFIRMED, DRAFT, HIGHLIGHT, IMPORTED, PARAM_BG, PRIMARY, SECTION_BG, TRIANGLE, UNIFIED
 from src.services.report_generation import parameter_designation, parameter_display_label
@@ -74,21 +76,21 @@ def _status_color(cell: dict | None, row_kind: str, show_changes: bool = True) -
         return QColor(COMPUTED)
     if not cell:
         return None
+    if cell.get("compare_highlight"):
+        return QColor(IMPORTED)
     if cell.get("locked"):
         return QColor(COMPUTED)
     if cell.get("unified"):
         return QColor(UNIFIED)
     status = cell.get("status") or "empty"
-    if not show_changes:
-        return None
     if status == "draft":
         return QColor(DRAFT)
+    if cell.get("excel_highlight") and show_changes:
+        return QColor(IMPORTED)
     if status == "confirmed":
         return QColor(CONFIRMED)
     if status == "triangle":
         return QColor(TRIANGLE)
-    if cell.get("excel_highlight"):
-        return QColor(IMPORTED)
     if status == "computed":
         return QColor(COMPUTED)
     return None
@@ -154,6 +156,14 @@ class CellDelegate(QStyledItemDelegate):
         model.setData(index, editor.text(), Qt.ItemDataRole.EditRole)
 
 
+def _is_main_sheet(sheet: dict) -> bool:
+    return bool(sheet.get("is_primary") and not sheet.get("is_base"))
+
+
+def _is_version_sheet(sheet: dict) -> bool:
+    return bool(sheet.get("is_issued") or sheet.get("is_base"))
+
+
 class SheetTabBar(QFrame):
     sheet_selected = pyqtSignal(str)
     menu_requested = pyqtSignal(str, object)
@@ -162,6 +172,10 @@ class SheetTabBar(QFrame):
         super().__init__(parent)
         self.setObjectName("sheet-tabs")
         self.buttons: dict[str, QPushButton] = {}
+        self._versions_collapsed = False
+        self._version_ids: set[str] = set()
+        self._main_id = ""
+        self._toggle: QToolButton | None = None
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 0, 8, 0)
         layout.setSpacing(3)
@@ -186,23 +200,37 @@ class SheetTabBar(QFrame):
             if widget:
                 widget.deleteLater()
         self.buttons = {}
+        self._toggle = None
+        self._version_ids = set()
+        self._main_id = ""
+        current = next((item for item in sheets if str(item.get("id") or "") == str(current_id or "")), None)
+        if current is not None and _is_version_sheet(current):
+            self._versions_collapsed = False
+        has_versions = any(_is_version_sheet(item) for item in sheets)
         for sheet in sheets:
             sheet_id = str(sheet.get("id") or "")
             label = sheet.get("name") or ""
-            if sheet.get("is_primary"):
-                label = f"{label} · основной"
             button = QPushButton(label)
-            if sheet.get("is_issued"):
-                button.setIcon(flag_icon())
-                button.setToolTip("Версия выдана")
+            if sheet.get("is_base"):
+                button.setToolTip("Базовый лист. Только просмотр.")
+            elif sheet.get("is_issued"):
+                kind = normalize_issued_kind(sheet.get("issued_kind"), True)
+                button.setIcon(issued_kind_icon(kind))
+                label_kind = issued_kind_label(kind)
+                button.setToolTip(f"Выдано: {label_kind}" if label_kind else "Версия выдана")
+            elif sheet.get("is_primary"):
+                button.setToolTip("Основная таблица. Здесь ведётся работа.")
             button.setProperty("sheetTab", True)
+            button.setProperty("mainSheet", _is_main_sheet(sheet))
+            button.setProperty("baseSheet", bool(sheet.get("is_base")))
             button.setCheckable(True)
             button.setAutoExclusive(True)
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             button.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
             bold = QFont(button.font())
             bold.setWeight(QFont.Weight.DemiBold)
-            button.setMinimumWidth(QFontMetrics(bold).horizontalAdvance(label) + 28)
+            extra = 44 if sheet.get("is_issued") else 28
+            button.setMinimumWidth(QFontMetrics(bold).horizontalAdvance(label) + extra)
             button.setChecked(sheet_id == current_id)
             button.setEnabled(not bool(self.property("busy")))
             button.clicked.connect(lambda _=False, sid=sheet_id: self.sheet_selected.emit(sid))
@@ -211,7 +239,51 @@ class SheetTabBar(QFrame):
                 lambda pos, sid=sheet_id, btn=button: self.menu_requested.emit(sid, btn.mapToGlobal(pos))
             )
             self._row_layout.insertWidget(self._row_layout.count() - 1, button)
+            button.style().unpolish(button)
+            button.style().polish(button)
             self.buttons[sheet_id] = button
+            if _is_main_sheet(sheet):
+                self._main_id = sheet_id
+                if has_versions:
+                    self._add_versions_toggle()
+            if _is_version_sheet(sheet):
+                self._version_ids.add(sheet_id)
+        self._apply_version_visibility()
+
+    def _add_versions_toggle(self) -> None:
+        toggle = QToolButton()
+        toggle.setObjectName("sheet-versions-toggle")
+        toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        toggle.setAutoRaise(True)
+        toggle.setEnabled(not bool(self.property("busy")))
+        palette = toggle.palette()
+        palette.setColor(QPalette.ColorRole.ButtonText, QColor("#9aabb8"))
+        toggle.setPalette(palette)
+        toggle.clicked.connect(self._toggle_version_sheets)
+        self._row_layout.insertWidget(self._row_layout.count() - 1, toggle)
+        self._toggle = toggle
+
+    def _toggle_version_sheets(self) -> None:
+        self._versions_collapsed = not self._versions_collapsed
+        self._apply_version_visibility()
+        if self._versions_collapsed and self._main_id:
+            current = next((button for button in self.buttons.values() if button.isChecked()), None)
+            current_id = next((sid for sid, button in self.buttons.items() if button is current), "")
+            if current_id in self._version_ids:
+                self.sheet_selected.emit(self._main_id)
+
+    def _apply_version_visibility(self) -> None:
+        hidden = self._versions_collapsed
+        for sheet_id in self._version_ids:
+            button = self.buttons.get(sheet_id)
+            if button is not None:
+                button.setVisible(not hidden)
+        if self._toggle is None:
+            return
+        self._toggle.setArrowType(Qt.ArrowType.RightArrow if hidden else Qt.ArrowType.DownArrow)
+        self._toggle.setToolTip(
+            "Показать выданные и базовый листы" if hidden else "Скрыть выданные и базовый листы"
+        )
 
 
 class TablePage(QWidget):
@@ -227,7 +299,10 @@ class TablePage(QWidget):
     sheet_primary_requested = pyqtSignal(str)
     sheet_ordinary_requested = pyqtSignal(str)
     sheet_delete_requested = pyqtSignal(str)
-    sheet_issued_requested = pyqtSignal(str)
+    sheet_issued_requested = pyqtSignal(str, bool, str)
+    sheet_base_requested = pyqtSignal(str)
+    sheet_change_highlight_requested = pyqtSignal(str, bool)
+    sheet_compare_requested = pyqtSignal(str)
     draft_requested = pyqtSignal(str, str, str, object)
     confirm_requested = pyqtSignal(str, str, str, str, object)
     discard_requested = pyqtSignal(str, str)
@@ -266,6 +341,7 @@ class TablePage(QWidget):
         self._draft_save_target: tuple[str, str] | None = None
         self._history_sizes = {"right": 360, "bottom": 260}
         self._shown_parameters: list[dict] = []
+        self._compare_view = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
@@ -439,7 +515,7 @@ class TablePage(QWidget):
         self.table = FrozenSheetTable()
         self.table.setObjectName("guide-table")
         self.table.setItemDelegate(CellDelegate(self.table))
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
         self.table.cellClicked.connect(self._cell_clicked)
         self.table.cellDoubleClicked.connect(self._cell_double)
@@ -456,6 +532,9 @@ class TablePage(QWidget):
         self.table.viewport().setMouseTracking(True)
         self.table.viewport().installEventFilter(self)
         self.table.cellEntered.connect(self._cell_entered)
+        QShortcut(QKeySequence.StandardKey.Copy, self.table, self._copy_cells)
+        QShortcut(QKeySequence.StandardKey.Copy, self.table.frozen, self._copy_cells)
+        QShortcut(QKeySequence.StandardKey.Paste, self.table, self._paste_cells)
         split.addWidget(self.table)
 
         self.split = split
@@ -551,8 +630,16 @@ class TablePage(QWidget):
         root.addWidget(self.empty)
 
     def _view_only(self) -> bool:
+        if self._compare_view:
+            return True
         book = self.workbook or {}
-        return bool(book.get("is_primary") or book.get("is_issued"))
+        return bool(book.get("is_issued") or book.get("is_base"))
+
+    def _show_change_highlight(self) -> bool:
+        book = self.workbook or {}
+        if "show_change_highlight" in book:
+            return bool(book.get("show_change_highlight"))
+        return not bool(book.get("is_issued") or book.get("is_base"))
 
     def set_mode(self, mode: str) -> None:
         if self._view_only():
@@ -596,16 +683,16 @@ class TablePage(QWidget):
             f"{cell.get('parameter_key')}:{cell.get('column_key')}": cell for cell in (workbook or {}).get("cells") or []
         }
         has_book = catalog is not None and workbook is not None
-        self.empty.setVisible(not has_book)
+        self.empty.setVisible(not has_book and not self._compare_view)
         self.table.setVisible(has_book)
-        self.sheet_bar.setVisible(has_book)
+        self.sheet_bar.setVisible(has_book and not self._compare_view)
         writable = can_write and not busy and has_book
         self.save_btn.setEnabled(writable)
         self.import_btn.setEnabled(writable)
         self.export_sheet_btn.setEnabled(has_book and not busy)
         self.export_all_btn.setEnabled(has_book and not busy)
         self.report_btn.setEnabled(has_book and not busy)
-        if workbook and (workbook.get("is_primary") or workbook.get("is_issued")):
+        if workbook and (workbook.get("is_issued") or workbook.get("is_base")):
             self.set_mode("view")
         locked = self._view_only()
         self.edit_btn.setVisible(not locked)
@@ -667,6 +754,27 @@ class TablePage(QWidget):
                 self.history_table.setItem(row, col, QTableWidgetItem(str(value)))
         self.history_table.resizeColumnsToContents()
 
+    def configure_compare_view(self) -> None:
+        self._compare_view = True
+        for widget in (
+            self.save_btn,
+            self.import_btn,
+            self.export_sheet_btn,
+            self.export_all_btn,
+            self.report_btn,
+            self.mode_box,
+            self.unsaved_label,
+            self.structure_btn,
+            self.sheet_bar,
+            self.empty,
+            self.edit_row,
+            self.comment_box,
+        ):
+            widget.hide()
+        self.view_hint.setText("Выберите ячейку, чтобы увидеть её историю.")
+        self.set_history_layout("right", True, self._history_sizes)
+        self.set_mode("view")
+
     def current_cell(self) -> tuple[str, str] | None:
         return self._selected
 
@@ -681,10 +789,15 @@ class TablePage(QWidget):
         action.setEnabled(self.can_write and not self.busy)
 
     def _refresh_hints(self) -> None:
-        if (self.workbook or {}).get("is_primary"):
-            self.mode_hint.setText("Основной лист доступен только для просмотра.")
+        if self._compare_view:
+            self.mode_hint.setText("Оранжевым отмечены ячейки, которые отличаются от выбранных вкладок. Только просмотр.")
+            return
+        if (self.workbook or {}).get("is_base"):
+            self.mode_hint.setText("Базовый лист доступен только для просмотра.")
         elif (self.workbook or {}).get("is_issued"):
-            self.mode_hint.setText("Версия выдана. Лист доступен только для просмотра.")
+            kind_label = issued_kind_label((self.workbook or {}).get("issued_kind"), True)
+            suffix = f" ({kind_label})" if kind_label else ""
+            self.mode_hint.setText(f"Версия выдана{suffix}. Лист доступен только для просмотра.")
         elif self.table_mode == "edit":
             if self._has_excel_highlight():
                 self.mode_hint.setText("Оранжевый — история из Excel, жёлтый — черновик, зелёный — сохранено.")
@@ -758,7 +871,7 @@ class TablePage(QWidget):
             color = _status_color(
                 cell,
                 parameters[row].get("row_kind") or "editable",
-                show_changes=not (self.workbook or {}).get("is_issued"),
+                show_changes=self._show_change_highlight(),
             )
             item.setBackground(QBrush(color) if color else QBrush())
             self._decorate_cell_item(item, cell, selected=self._selected == (param, column))
@@ -936,7 +1049,7 @@ class TablePage(QWidget):
                     color = _status_color(
                         cell,
                         param.get("row_kind") or "editable",
-                        show_changes=not (self.workbook or {}).get("is_issued"),
+                        show_changes=self._show_change_highlight(),
                     )
                     if color:
                         item.setBackground(QBrush(color))
@@ -992,8 +1105,13 @@ class TablePage(QWidget):
         self.cell_caption.setText(f"{label}{', ' + unit if unit else ''} / ступень {(col or {}).get('label') or ''}")
         self.history_empty.hide()
         editing = self.table_mode == "edit" and self.can_write and not self._view_only()
-        self.edit_row.setVisible(editing)
-        self.view_hint.setVisible(not editing)
+        self.edit_row.setVisible(editing and not self._compare_view)
+        if self._compare_view:
+            self.view_hint.setText("Только просмотр. История выбранной ячейки — в таблице справа.")
+            self.view_hint.show()
+            self.comment_box.hide()
+        else:
+            self.view_hint.setVisible(not editing)
         if cell.get("unified"):
             self.lock_hint.setText("Унификация включена. Изменение значения ячейки запрещено.")
             self.lock_hint.show()
@@ -1030,7 +1148,7 @@ class TablePage(QWidget):
                         color = _status_color(
                             cell,
                             param.get("row_kind") or "editable",
-                            show_changes=not (self.workbook or {}).get("is_issued"),
+                            show_changes=self._show_change_highlight(),
                         )
                     if row == sel_row or (col >= DATA_COLUMN and col - DATA_COLUMN == sel_col):
                         if color is None:
@@ -1112,6 +1230,90 @@ class TablePage(QWidget):
         if text == previous and hyperlink == (current.get("hyperlink") or None):
             return
         self.draft_requested.emit(str(param), str(column), text, hyperlink)
+
+    def _copy_grid(self) -> QTableWidget:
+        focus = QApplication.focusWidget()
+        if focus is self.table.frozen or self.table.frozen.isAncestorOf(focus):
+            return self.table.frozen
+        return self.table
+
+    def _selection_text(self, grid: QTableWidget | None = None) -> str:
+        grid = grid or self._copy_grid()
+        indexes = [index for index in grid.selectedIndexes() if index.isValid()]
+        if not indexes:
+            row, column = grid.currentRow(), grid.currentColumn()
+            if row < 0 or column < 0:
+                return ""
+            indexes = [grid.model().index(row, column)]
+        rows = sorted({index.row() for index in indexes})
+        cols = sorted({index.column() for index in indexes})
+        lines: list[str] = []
+        for row in range(rows[0], rows[-1] + 1):
+            cells: list[str] = []
+            for column in range(cols[0], cols[-1] + 1):
+                item = grid.item(row, column)
+                cells.append(item.text() if item else "")
+            lines.append("\t".join(cells))
+        return "\n".join(lines)
+
+    def _copy_cells(self) -> None:
+        text = self._selection_text()
+        if text == "" and self._selected:
+            text = self._cell_value(*self._selected)
+        if text == "" and not self._selected:
+            return
+        QApplication.clipboard().setText(text)
+
+    def _can_paste(self) -> bool:
+        return bool(self.can_write and not self.busy and not self._view_only() and self.catalog)
+
+    def _paste_cells(self) -> None:
+        if not self._can_paste():
+            return
+        raw = QApplication.clipboard().text()
+        if raw is None:
+            return
+        text = str(raw).replace("\r\n", "\n").replace("\r", "\n")
+        if text.endswith("\n"):
+            text = text[:-1]
+        if text == "":
+            return
+        self.set_mode("edit")
+        start_row = self.table.currentRow()
+        start_col = self.table.currentColumn()
+        if start_row < 0:
+            start_row = 0
+        if start_col < DATA_COLUMN:
+            start_col = DATA_COLUMN
+        lines = text.split("\n")
+        parameters = self._shown_parameters
+        columns = (self.catalog or {}).get("columns") or []
+        for row_offset, line in enumerate(lines):
+            values = line.split("\t")
+            for col_offset, value in enumerate(values):
+                row = start_row + row_offset
+                column = start_col + col_offset
+                if row >= len(parameters) or column < DATA_COLUMN:
+                    continue
+                col_index = column - DATA_COLUMN
+                if col_index >= len(columns):
+                    continue
+                param = parameters[row]
+                if param.get("row_kind") != "editable":
+                    continue
+                parameter_key = param.get("key")
+                column_key = columns[col_index].get("key")
+                if not parameter_key or not column_key:
+                    continue
+                cell = self._cells.get(f"{parameter_key}:{column_key}") or {}
+                if cell.get("locked") or cell.get("unified"):
+                    continue
+                item = self.table.item(row, column)
+                if item is None:
+                    continue
+                if item.text() == value:
+                    continue
+                item.setText(value)
 
     def _cell_value(self, parameter_key: str, column_key: str) -> str:
         cell = self._cells.get(f"{parameter_key}:{column_key}") or {}
@@ -1358,7 +1560,17 @@ class TablePage(QWidget):
         else:
             item.setForeground(QBrush(QColor("#263238")))
         url = str((cell or {}).get("hyperlink") or "").strip()
-        item.setToolTip("Нажмите Ctrl+ЛКМ, чтобы открыть ссылку" if url else "")
+        tips: list[str] = []
+        against = (cell or {}).get("compare_against") or []
+        if against:
+            lines = [
+                f"«{item.get('sheet_name') or ''}»: {item.get('value') if item.get('value') not in (None, '') else '—'}"
+                for item in against
+            ]
+            tips.append("Отличается от:\n" + "\n".join(lines))
+        if url:
+            tips.append("Нажмите Ctrl+ЛКМ, чтобы открыть ссылку")
+        item.setToolTip("\n".join(tips))
 
     def _show_cell_link(self, cell: dict | None) -> None:
         url = str((cell or {}).get("hyperlink") or "").strip()
@@ -1411,32 +1623,64 @@ class TablePage(QWidget):
             self.sheet_selected.emit(str(sheet_id))
 
     def _sheet_menu_at(self, sheet_id: str, global_pos) -> None:
+        menu = self._sheet_context_menu(sheet_id)
+        if menu:
+            menu.exec(global_pos)
+
+    def _sheet_context_menu(self, sheet_id: str) -> QMenu | None:
         sheet = next((item for item in self.sheets if item.get("id") == sheet_id), None)
         if not sheet:
-            return
+            return None
         menu = QMenu(self)
         writable = self.can_write and not self.busy
+        compare = menu.addAction("Сравнить данные", lambda: self.sheet_compare_requested.emit(sheet_id))
+        compare.setEnabled(len(self.sheets) > 1 and not self.busy)
+        menu.addSeparator()
         rename = menu.addAction("Переименовать лист", lambda: self.sheet_rename_requested.emit(sheet_id))
-        rename.setEnabled(writable and not sheet.get("is_primary"))
-        if not sheet.get("is_primary"):
-            issued = menu.addAction(
-                "Версия выдана",
-                lambda _checked=False, sid=sheet_id: self.sheet_issued_requested.emit(sid),
+        rename.setEnabled(writable and not sheet.get("is_base"))
+        if not sheet.get("is_base"):
+            assign_base = menu.addAction("Назначить базовым листом", lambda: self.sheet_base_requested.emit(sheet_id))
+            assign_base.setEnabled(writable)
+        if not sheet.get("is_primary") and not sheet.get("is_base"):
+            if sheet.get("is_issued"):
+                kind_menu = menu.addMenu("Тип выдачи")
+                current = normalize_issued_kind(sheet.get("issued_kind"), True)
+                for key, name in CHOICES:
+                    action = kind_menu.addAction(issued_kind_icon(key), name)
+                    action.setCheckable(True)
+                    action.setChecked(key == current)
+                    action.triggered.connect(
+                        lambda _checked=False, sid=sheet_id, kind=key: self.sheet_issued_requested.emit(sid, True, kind)
+                    )
+                clear = menu.addAction(
+                    "Снять отметку «Выдано»",
+                    lambda _=False, sid=sheet_id: self.sheet_issued_requested.emit(sid, False, ""),
+                )
+                clear.setEnabled(writable)
+                kind_menu.setEnabled(writable)
+            else:
+                issue_menu = menu.addMenu("Отметить как выданный")
+                for key, name in CHOICES:
+                    issue_menu.addAction(
+                        issued_kind_icon(key),
+                        name,
+                        lambda _checked=False, sid=sheet_id, kind=key: self.sheet_issued_requested.emit(sid, True, kind),
+                    )
+                issue_menu.setEnabled(writable)
+        if sheet.get("is_primary") and not sheet.get("is_base"):
+            show_changes = bool(sheet.get("show_change_highlight", True))
+            highlight = menu.addAction(
+                "Скрыть подсветку изменённых ячеек" if show_changes else "Показать изменённые ячейки",
+                lambda _checked=False, sid=sheet_id, enabled=not show_changes: self.sheet_change_highlight_requested.emit(
+                    sid, enabled
+                ),
             )
-            issued.setCheckable(True)
-            issued.setChecked(bool(sheet.get("is_issued")))
-            issued.setEnabled(writable)
-        if sheet.get("is_primary"):
-            ordinary = menu.addAction("Сделать обычным листом", lambda: self.sheet_ordinary_requested.emit(sheet_id))
-            ordinary.setEnabled(writable)
-        else:
-            primary = menu.addAction("Сделать основным", lambda: self.sheet_primary_requested.emit(sheet_id))
-            primary.setEnabled(writable and not sheet.get("is_issued"))
-        copy = menu.addAction("Копировать лист", lambda: self.sheet_copy_requested.emit(sheet_id))
-        copy.setEnabled(writable)
+            highlight.setEnabled(writable)
         delete = menu.addAction("Удалить лист", lambda: self.sheet_delete_requested.emit(sheet_id))
-        delete.setEnabled(writable and len(self.sheets) > 1)
-        menu.exec(global_pos)
+        delete.setEnabled(
+            writable and len(self.sheets) > 1 and not sheet.get("is_base") and not sheet.get("is_primary")
+        )
+        return menu
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
         if watched is self.table.viewport() and event.type() == QEvent.Type.Leave:
@@ -1488,6 +1732,10 @@ class TablePage(QWidget):
     def _show_table_menu(self, row: int, column: int, global_pos) -> None:
         keys = self._keys_at(row, column) if row >= 0 and column >= 0 else None
         menu = QMenu(self)
+        copy_act = menu.addAction("Копировать", self._copy_cells)
+        copy_act.setEnabled(row >= 0 and column >= 0)
+        paste_act = menu.addAction("Вставить", self._paste_cells)
+        paste_act.setEnabled(self._can_paste())
         if not keys:
             menu.addAction("Найти в таблице", self._open_find)
             if self.history_panel.isVisible():

@@ -5,18 +5,30 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 from sqlalchemy.orm.attributes import set_committed_value
 
 from backend.models import Cell, CellChange, Notification, ObjectItem, TriangleSheet, Version, Workbook
 from src.catalog import column_by_key, columns, parameter_by_key, parameters
+from src.issued_kinds import LABELS as ISSUED_KIND_LABELS
+from src.issued_kinds import issued_kind_label, normalize_issued_kind
 from src.services.decimals import normalize_decimal_commas
 from src.services.journal import add_audit
 from src.services.rules import all_lock_keys, matching_rules, options_for
+from src.services.notification_settings import recipients_for_cell_change
+from src.services.sheet_compare import combine_compare_targets, values_differ
 
 
 PRIMARY_ORIGIN_COMMENT = "Данные из основного листа"
 EXCEL_SHEET_COMMENT_PREFIX = "Изменение листа «"
+MAIN_SHEET_NAME = "Основная таблица"
+PLACEHOLDER_MAIN_NAMES = frozenset(
+    {
+        "исходные данные",
+        "основной лист",
+        "основная таблица",
+    }
+)
 
 
 def excel_sheet_comment(name: str) -> str:
@@ -90,6 +102,83 @@ def deleted_parameter_keys(workbook: Workbook) -> set[str]:
 
 def _save_json(workbook: Workbook, field: str, payload) -> None:
     setattr(workbook, field, json.dumps(payload, ensure_ascii=False))
+
+
+def _report_notes_raw(workbook: Workbook) -> list[dict]:
+    raw = getattr(workbook, "report_notes_json", None) or "[]"
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(data, list):
+        return []
+    notes = []
+    for item in data:
+        if not isinstance(item, dict) or not str(item.get("text") or "").strip():
+            continue
+        notes.append(
+            {
+                "id": str(item.get("id") or ""),
+                "parameter_key": str(item.get("parameter_key") or ""),
+                "column_key": str(item.get("column_key") or ""),
+                "text": str(item.get("text") or "").strip(),
+                "created_at": str(item.get("created_at") or ""),
+                "author": str(item.get("author") or ""),
+            }
+        )
+    notes.sort(key=lambda item: (item["created_at"], item["id"]))
+    return notes
+
+
+def report_notes(workbook: Workbook) -> list[dict]:
+    notes = _report_notes_raw(workbook)
+    numbered = []
+    for index, item in enumerate(notes, start=1):
+        row = dict(item)
+        row["number"] = index
+        numbered.append(row)
+    return numbered
+
+
+def add_report_note(
+    session: Session,
+    workbook: Workbook,
+    parameter_key: str,
+    column_key: str,
+    text: str,
+    username: str = "",
+) -> list[dict]:
+    cleaned = (text or "").strip()
+    if not cleaned:
+        raise ValueError("Введите текст примечания")
+    if not (parameter_key or "").strip() or not (column_key or "").strip():
+        raise ValueError("Выберите ячейку для примечания")
+    notes = _report_notes_raw(workbook)
+    notes.append(
+        {
+            "id": _new_id(),
+            "parameter_key": parameter_key.strip(),
+            "column_key": column_key.strip(),
+            "text": cleaned,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "author": username,
+        }
+    )
+    _save_json(workbook, "report_notes_json", notes)
+    workbook.updated_at = datetime.now(timezone.utc)
+    session.flush()
+    return report_notes(workbook)
+
+
+def delete_report_note(session: Session, workbook: Workbook, note_id: str) -> list[dict]:
+    notes = _report_notes_raw(workbook)
+    remaining = [item for item in notes if item["id"] != note_id]
+    if len(remaining) == len(notes):
+        raise ValueError("Примечание не найдено")
+    _save_json(workbook, "report_notes_json", remaining)
+    workbook.updated_at = datetime.now(timezone.utc)
+    session.flush()
+    return report_notes(workbook)
 
 
 def column_overrides(workbook: Workbook) -> dict:
@@ -186,6 +275,8 @@ def cell_to_dict(cell: Cell, workbook: Workbook | None = None) -> dict:
         "locked": locked,
         "unified": bool(cell.unified),
         "excel_highlight": bool(cell.excel_highlight),
+        "compare_highlight": False,
+        "compare_against": [],
         "updated_at": _iso(cell.updated_at),
         "updated_by": cell.updated_by,
         "options": options_for(param_key),
@@ -227,10 +318,12 @@ def delete_sheet_workbook(session: Session, root: Workbook, target: Workbook) ->
     if target.id not in {item.id for item in sheets}:
         raise ValueError("Лист не найден в проекте")
     remaining = [item for item in sheets if item.id != target.id]
+    if target.is_base:
+        raise ValueError("Базовый лист нельзя удалить")
+    if target.is_primary:
+        raise ValueError("Основную таблицу нельзя удалить")
     if not remaining:
         raise ValueError("Нельзя удалить единственный лист проекта")
-    if target.is_primary and target.id != root.id:
-        raise ValueError("Сначала снимите с листа статус основного")
     successor = remaining[0]
     if target.id == root.id:
         for item in remaining:
@@ -270,6 +363,8 @@ def set_primary_sheet(session: Session, workbook: Workbook, username: str) -> li
         return sheets
     if workbook.is_issued:
         raise ValueError("Снимите отметку «Версия выдана», прежде чем сделать лист основным")
+    if any(item.is_base and item.id != workbook.id for item in sheets):
+        raise ValueError("Основной лист задаёт базовый. Назначьте базовым другой лист, если нужно сменить начало проекта")
 
     for item in sheets:
         item.is_primary = item.id == workbook.id
@@ -298,6 +393,8 @@ def unset_primary_sheet(session: Session, workbook: Workbook, username: str) -> 
         raise ValueError("Лист не найден в проекте")
     if not workbook.is_primary:
         return sheets
+    if workbook.is_base:
+        raise ValueError("Базовый лист нельзя сделать обычным")
 
     workbook.is_primary = False
     root.updated_at = _now()
@@ -317,6 +414,8 @@ def unset_primary_sheet(session: Session, workbook: Workbook, username: str) -> 
 def rename_sheet(session: Session, workbook: Workbook, name: str, username: str) -> Workbook:
     root = workbook.parent or workbook
     cleaned_name = name.strip()
+    if workbook.is_base:
+        raise ValueError("Базовый лист нельзя переименовать")
     if not cleaned_name:
         raise ValueError("Укажите название листа")
     siblings = list_sheet_workbooks(session, root)
@@ -341,12 +440,9 @@ def rename_sheet(session: Session, workbook: Workbook, name: str, username: str)
 
 
 def ensure_workbook(session: Session, object_item: ObjectItem, username: str) -> tuple[Workbook, bool]:
-    existing = (
-        session.query(Workbook)
-        .filter(Workbook.object_id == object_item.id, Workbook.parent_workbook_id.is_(None))
-        .order_by(Workbook.created_at.desc())
-        .first()
-    )
+    from src.services.objects import workbook_for_object
+
+    existing = workbook_for_object(session, object_item.id)
     if existing:
         return existing, False
     workbook = Workbook(
@@ -354,10 +450,12 @@ def ensure_workbook(session: Session, object_item: ObjectItem, username: str) ->
         object_id=object_item.id,
         created_by=username,
         is_primary=True,
+        sheet_name=MAIN_SHEET_NAME,
         extra_columns_json="[]",
         extra_parameters_json="[]",
         parameter_overrides_json="{}",
         deleted_parameters_json="[]",
+        report_notes_json="[]",
     )
     session.add(workbook)
     session.flush()
@@ -372,6 +470,57 @@ def primary_sheet(workbook: Workbook) -> Workbook:
     return root
 
 
+def sheet_is_frozen(workbook: Workbook) -> bool:
+    return bool(workbook.is_issued or workbook.is_base)
+
+
+def base_sheet_title(now: datetime | None = None) -> str:
+    return f"База ({(now or datetime.now()).strftime('%d.%m.%Y')})"
+
+
+def issued_sheet_title(now: datetime | None = None) -> str:
+    return (now or datetime.now()).strftime("%d.%m.%Y")
+
+
+def is_placeholder_main_name(name: str) -> bool:
+    return (name or "").strip().casefold() in PLACEHOLDER_MAIN_NAMES
+
+
+def working_sheet(workbook: Workbook) -> Workbook:
+    root = workbook.parent or workbook
+    for item in (root, *list(root.sheets)):
+        if item.is_primary and not item.is_base:
+            return item
+    return primary_sheet(workbook)
+
+
+def last_issued_sheet(sheets: list[Workbook]) -> Workbook | None:
+    issued = [item for item in sheets if item.is_issued and not item.is_base]
+    if not issued:
+        return None
+    return max(
+        issued,
+        key=lambda item: (_aware(item.created_at) or datetime.min.replace(tzinfo=timezone.utc), item.sheet_order),
+    )
+
+
+def order_project_sheets(sheets: list[Workbook]) -> list[Workbook]:
+    main = next((item for item in sheets if item.is_primary and not item.is_base), None)
+    if main is None:
+        main = next((item for item in sheets if item.is_primary), sheets[0] if sheets else None)
+    base = next((item for item in sheets if item.is_base), None)
+    issued = sorted(
+        [item for item in sheets if item.is_issued and not item.is_base and item is not main],
+        key=lambda item: (_aware(item.created_at) or datetime.min.replace(tzinfo=timezone.utc), item.sheet_order),
+    )
+    seen = {item.id for item in [main, base, *issued] if item is not None}
+    rest = [item for item in sheets if item.id not in seen]
+    ordered = [item for item in [main, base, *issued, *rest] if item is not None]
+    for order, item in enumerate(ordered):
+        item.sheet_order = order
+    return ordered
+
+
 def sheet_brief(workbook: Workbook) -> dict:
     return {
         "id": workbook.id,
@@ -379,14 +528,15 @@ def sheet_brief(workbook: Workbook) -> dict:
         "order": workbook.sheet_order,
         "is_primary": workbook.is_primary,
         "is_issued": bool(workbook.is_issued),
+        "issued_kind": normalize_issued_kind(getattr(workbook, "issued_kind", None), bool(workbook.is_issued)),
+        "is_base": bool(workbook.is_base),
+        "show_change_highlight": bool(workbook.show_change_highlight),
     }
 
 
 def _snapshot_payload(cells: list[Cell]) -> str:
     rows = []
     for cell in cells:
-        if not (cell.value or cell.draft_value or cell.hyperlink or cell.locked or cell.unified or cell.excel_highlight):
-            continue
         rows.append(
             {
                 "parameter_key": cell.parameter_key,
@@ -432,21 +582,66 @@ def cells_from_issued_snapshot(workbook: Workbook) -> list[Cell]:
     return cells
 
 
-def set_sheet_issued(session: Session, workbook: Workbook, issued: bool, username: str) -> Workbook:
+def _issued_source_cells(workbook: Workbook) -> list[Cell]:
+    if primary_sheet(workbook).id == workbook.id:
+        return list(workbook.cells)
+    merged = dict(_base_cells(workbook))
+    for cell in workbook.cells:
+        merged[(cell.parameter_key, cell.column_key)] = cell
+    return list(merged.values())
+
+
+def freeze_as_issued(workbook: Workbook, issued_kind: str | None = None) -> None:
+    session = object_session(workbook)
+    if session is not None:
+        session.flush()
+        session.expire(workbook, ["cells"])
+    workbook.issued_snapshot_json = _snapshot_payload(_issued_source_cells(workbook))
+    workbook.is_issued = True
+    workbook.issued_kind = normalize_issued_kind(issued_kind, True)
+    workbook.is_base = False
+    workbook.show_change_highlight = False
+
+
+def reset_working_colors(session: Session, workbook: Workbook) -> None:
+    for cell in list(workbook.cells):
+        cell.excel_highlight = False
+        if cell.status in {"confirmed", "triangle"}:
+            cell.status = "initial" if cell.value else "empty"
+    session.flush()
+
+
+def set_sheet_issued(
+    session: Session,
+    workbook: Workbook,
+    issued: bool,
+    username: str,
+    issued_kind: str | None = None,
+) -> Workbook:
     root = workbook.parent or workbook
     if all(item.id != workbook.id for item in list_sheet_workbooks(session, root)):
         raise ValueError("Лист не найден в проекте")
     if workbook.is_primary:
-        raise ValueError("Основной лист нельзя пометить как выданную версию")
+        raise ValueError("Основную таблицу нельзя пометить как выданную версию. Используйте «Выдать версию» в отчёте")
+    if workbook.is_base:
+        raise ValueError("Базовый лист уже зафиксирован и недоступен как выданная версия")
     if issued and any(cell.status == "draft" for cell in workbook.cells):
         raise ValueError("Сначала сохраните или отмените черновики")
     if issued:
-        workbook.issued_snapshot_json = _snapshot_payload(effective_cells(workbook))
-        workbook.is_issued = True
-        summary = f"Лист «{workbook.sheet_name}» отмечен как выданная версия"
+        kind = normalize_issued_kind(issued_kind, True)
+        if issued_kind not in (None, "") and issued_kind not in ISSUED_KIND_LABELS:
+            raise ValueError("Выберите тип выдачи: Предварительные данные, Конечные данные или Обновление")
+        if workbook.is_issued:
+            workbook.issued_kind = kind
+            summary = f"Тип выдачи листа «{workbook.sheet_name}»: {issued_kind_label(kind)}"
+        else:
+            freeze_as_issued(workbook, kind)
+            summary = f"Лист «{workbook.sheet_name}» отмечен как выданная версия ({issued_kind_label(kind)})"
     else:
         workbook.is_issued = False
+        workbook.issued_kind = ""
         workbook.issued_snapshot_json = "[]"
+        workbook.show_change_highlight = True
         compact_sheet(session, workbook)
         summary = f"С листа «{workbook.sheet_name}» снята отметка выданной версии"
     workbook.updated_at = _now()
@@ -464,6 +659,235 @@ def set_sheet_issued(session: Session, workbook: Workbook, issued: bool, usernam
     return workbook
 
 
+def _aware(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
+def _in_period(stamp: datetime | None, history_after: datetime | None) -> bool:
+    if history_after is None:
+        return True
+    current = _aware(stamp)
+    if current is None:
+        return False
+    return current > history_after
+
+
+def _copy_period_history(
+    session: Session,
+    source: Cell,
+    target: Cell,
+    history_after: datetime | None,
+) -> bool:
+    copied = False
+    for change in sorted(source.changes, key=lambda item: item.created_at):
+        if not _in_period(change.created_at, history_after):
+            continue
+        session.add(
+            CellChange(
+                id=_new_id(),
+                cell_id=target.id,
+                author=change.author,
+                created_at=change.created_at,
+                old_value=change.old_value,
+                new_value=change.new_value,
+                comment=change.comment,
+                user_journal=change.user_journal,
+            )
+        )
+        copied = True
+    return copied
+
+
+def snapshot_working_sheet(
+    session: Session,
+    source: Workbook,
+    name: str,
+    username: str,
+    *,
+    history_after: datetime | None = None,
+) -> Workbook:
+    from src.services.workbook_import import copy_sheet
+
+    clone = copy_sheet(session, source, name, username, include_values=False)
+    stored = {(item.parameter_key, item.column_key): item for item in source.cells}
+    moment = _now()
+    for cell in effective_cells(source):
+        if not (cell.value or cell.draft_value or cell.hyperlink):
+            continue
+        persistent = stored.get((cell.parameter_key, cell.column_key))
+        period_changed = bool(cell.excel_highlight) or cell.status in {"confirmed", "triangle"}
+        if persistent is not None:
+            period_changed = (
+                period_changed
+                or _in_period(persistent.updated_at, history_after)
+                or any(_in_period(change.created_at, history_after) for change in persistent.changes)
+            )
+        clone_cell = Cell(
+            id=_new_id(),
+            workbook_id=clone.id,
+            parameter_key=cell.parameter_key,
+            column_key=cell.column_key,
+            value=cell.value,
+            draft_value=None,
+            status="initial" if cell.value else "empty",
+            hyperlink=cell.hyperlink,
+            locked=bool(cell.locked),
+            unified=bool(cell.unified),
+            excel_highlight=bool(period_changed),
+            updated_by=username,
+            updated_at=moment,
+        )
+        session.add(clone_cell)
+        session.flush()
+        if persistent is not None:
+            _copy_period_history(session, persistent, clone_cell, history_after)
+    session.flush()
+    return clone
+
+
+def issue_version(
+    session: Session,
+    workbook: Workbook,
+    username: str,
+    issued_kind: str | None = None,
+) -> tuple[list[Workbook], Workbook]:
+    root = workbook.parent or workbook
+    sheets = list_sheet_workbooks(session, root)
+    main = working_sheet(root)
+    if any(cell.status == "draft" for cell in main.cells):
+        raise ValueError("Сначала сохраните или отмените черновики основной таблицы")
+    previous = last_issued_sheet(sheets)
+    history_after = _aware(previous.updated_at or previous.created_at) if previous is not None else None
+    title = _unique_sheet_name(issued_sheet_title(), sheets, "")
+    if issued_kind not in (None, "") and issued_kind not in ISSUED_KIND_LABELS:
+        raise ValueError("Выберите тип выдачи: Предварительные данные, Конечные данные или Обновление")
+    kind = normalize_issued_kind(issued_kind, True)
+    issued = snapshot_working_sheet(session, main, title, username, history_after=history_after)
+    freeze_as_issued(issued, kind)
+    issued_at = _now()
+    issued.created_at = issued_at
+    issued.updated_at = issued_at
+    reset_working_colors(session, main)
+    main.updated_at = issued_at
+    root.updated_at = issued_at
+    add_audit(
+        session,
+        actor=username,
+        action="version_issued",
+        workbook=root,
+        old_value=previous.sheet_name if previous else None,
+        new_value=issued.sheet_name,
+        summary=f"Выдана версия «{issued.sheet_name}» ({issued_kind_label(kind)})",
+    )
+    session.flush()
+    ordered = order_project_sheets(list_sheet_workbooks(session, root))
+    session.flush()
+    return ordered, issued
+
+
+def _unique_sheet_name(name: str, sheets: list[Workbook], current_id: str) -> str:
+    taken = {item.sheet_name.casefold() for item in sheets if item.id != current_id}
+    candidate = name[:255]
+    suffix = 2
+    while candidate.casefold() in taken:
+        candidate = f"{name} {suffix}"[:255]
+        suffix += 1
+    return candidate
+
+
+def _replace_base_cells(session: Session, target: Workbook, source: Workbook, username: str) -> None:
+    stale_ids = [cell.id for cell in list(target.cells)]
+    if stale_ids:
+        session.query(CellChange).filter(CellChange.cell_id.in_(stale_ids)).delete(synchronize_session=False)
+        for cell in list(target.cells):
+            session.delete(cell)
+        session.flush()
+        session.expire(target, ["cells"])
+    stored = {(item.parameter_key, item.column_key): item for item in source.cells}
+    moment = _now()
+    for cell in effective_cells(source):
+        if not (cell.value or cell.draft_value or cell.hyperlink):
+            continue
+        clone_cell = Cell(
+            id=_new_id(),
+            workbook_id=target.id,
+            parameter_key=cell.parameter_key,
+            column_key=cell.column_key,
+            value=cell.value,
+            draft_value=None,
+            status="initial" if cell.value else "empty",
+            hyperlink=cell.hyperlink,
+            locked=bool(cell.locked),
+            unified=bool(cell.unified),
+            excel_highlight=bool(cell.excel_highlight),
+            updated_by=username,
+            updated_at=moment,
+        )
+        session.add(clone_cell)
+        session.flush()
+        persistent = stored.get((cell.parameter_key, cell.column_key))
+        if persistent is not None:
+            copy_cell_changes(session, persistent, clone_cell)
+    session.flush()
+    session.refresh(target)
+    target.issued_snapshot_json = _snapshot_payload(list(target.cells))
+    target.is_base = True
+    target.is_issued = False
+    target.issued_kind = ""
+    target.is_primary = False
+    target.show_change_highlight = False
+
+
+def set_base_sheet(session: Session, workbook: Workbook, username: str) -> list[Workbook]:
+    root = workbook.parent or workbook
+    sheets = list_sheet_workbooks(session, root)
+    if all(item.id != workbook.id for item in sheets):
+        raise ValueError("Лист не найден в проекте")
+    if any(cell.status == "draft" for cell in workbook.cells):
+        raise ValueError("Сначала сохраните или отмените черновики")
+    previous = next((item for item in sheets if item.is_base), None)
+    title = _unique_sheet_name(base_sheet_title(), sheets, previous.id if previous else "")
+    if previous is None:
+        from src.services.workbook_import import copy_sheet
+
+        previous = copy_sheet(session, workbook, title, username, include_values=False)
+        sheets.append(previous)
+    previous.sheet_name = title
+    _replace_base_cells(session, previous, workbook, username)
+    workbook.updated_at = _now()
+    root.updated_at = _now()
+    add_audit(
+        session,
+        actor=username,
+        action="sheet_base_assigned",
+        workbook=root,
+        old_value=None,
+        new_value=previous.sheet_name,
+        summary=f"Лист «{previous.sheet_name}» назначен базовым по срезу «{workbook.sheet_name}»",
+    )
+    session.flush()
+    return order_project_sheets(list_sheet_workbooks(session, root))
+
+
+def set_change_highlight(session: Session, workbook: Workbook, enabled: bool) -> Workbook:
+    root = workbook.parent or workbook
+    if all(item.id != workbook.id for item in list_sheet_workbooks(session, root)):
+        raise ValueError("Лист не найден в проекте")
+    if workbook.is_issued or workbook.is_base:
+        raise ValueError("Оранжевую подсветку включают на основной таблице")
+    if not workbook.is_primary:
+        raise ValueError("Оранжевую подсветку включают на основной таблице")
+    workbook.show_change_highlight = bool(enabled)
+    workbook.updated_at = _now()
+    root.updated_at = _now()
+    session.flush()
+    return workbook
+
+
 def clear_excel_highlight(session: Session, workbook: Workbook) -> int:
     root = workbook.parent or workbook
     cleared = 0
@@ -472,7 +896,7 @@ def clear_excel_highlight(session: Session, workbook: Workbook) -> int:
             if cell.excel_highlight:
                 cell.excel_highlight = False
                 cleared += 1
-        if not sheet.is_issued:
+        if not sheet_is_frozen(sheet):
             continue
         try:
             raw = json.loads(sheet.issued_snapshot_json or "[]")
@@ -504,20 +928,26 @@ def cell_matches_base(cell: Cell, base: Cell | None) -> bool:
     )
 
 
+def _origin_cells(workbook: Workbook) -> list[Cell]:
+    if sheet_is_frozen(workbook):
+        return cells_from_issued_snapshot(workbook)
+    return list(workbook.cells)
+
+
 def _base_cells(workbook: Workbook) -> dict[tuple[str, str], Cell]:
     primary = primary_sheet(workbook)
     if primary.id == workbook.id:
         return {}
-    return {(cell.parameter_key, cell.column_key): cell for cell in primary.cells}
+    return {(cell.parameter_key, cell.column_key): cell for cell in _origin_cells(primary)}
 
 
 def effective_cells(workbook: Workbook) -> list[Cell]:
-    if workbook.is_issued:
+    if sheet_is_frozen(workbook):
         return cells_from_issued_snapshot(workbook)
     primary = primary_sheet(workbook)
     if primary.id == workbook.id:
         return list(workbook.cells)
-    merged = {(cell.parameter_key, cell.column_key): cell for cell in primary.cells}
+    merged = {(cell.parameter_key, cell.column_key): cell for cell in _origin_cells(primary)}
     for cell in workbook.cells:
         key = (cell.parameter_key, cell.column_key)
         if not cell_matches_base(cell, merged.get(key)):
@@ -526,7 +956,7 @@ def effective_cells(workbook: Workbook) -> list[Cell]:
 
 
 def compact_sheet(session: Session, workbook: Workbook) -> None:
-    if workbook.is_issued:
+    if sheet_is_frozen(workbook):
         return
     primary = primary_sheet(workbook)
     if primary.id == workbook.id:
@@ -865,15 +1295,16 @@ def confirm_cell(
     if not defer_flush:
         session.flush()
     cell.last_change_id = change.id
-    if not system and previous_author and previous_author != username:
-        add_notification(
-            session,
-            recipient=previous_author,
-            author=username,
-            workbook=workbook,
-            parameter_key=parameter_key,
-            column_key=column_key,
-        )
+    if not system:
+        for recipient in recipients_for_cell_change(session, workbook, cell, username, previous_author):
+            add_notification(
+                session,
+                recipient=recipient,
+                author=username,
+                workbook=workbook,
+                parameter_key=parameter_key,
+                column_key=column_key,
+            )
     if not system:
         apply_rules(session, workbook, parameter_key, column_key, username)
         session.flush()
@@ -1032,6 +1463,8 @@ def _history_cell(session: Session, workbook: Workbook, parameter_key: str, colu
         )
         .first()
     )
+    if sheet_is_frozen(workbook):
+        return cell
     base = _base_cells(workbook).get((parameter_key, column_key))
     if cell is None or cell_matches_base(cell, base):
         return base
@@ -1043,6 +1476,152 @@ def cell_history(session: Session, workbook: Workbook, parameter_key: str, colum
     if not cell:
         return []
     return sorted(cell.changes, key=lambda item: item.created_at)
+
+
+def _cell_compare_value(workbook: Workbook, parameter_key: str, column_key: str) -> str | None:
+    for cell in effective_cells(workbook):
+        if cell.parameter_key == parameter_key and cell.column_key == column_key:
+            return _display(cell)
+    return None
+
+
+def _sheet_value_map(workbook: Workbook) -> dict[tuple[str, str], str | None]:
+    return {(cell.parameter_key, cell.column_key): _display(cell) for cell in effective_cells(workbook)}
+
+
+def _resolved_compare_targets(
+    session: Session,
+    workbook: Workbook,
+    sheet_ids: list[str] | None,
+    range_from: str | None,
+    range_to: str | None,
+    combine: str,
+) -> tuple[list[Workbook], list[Workbook], str]:
+    sheets = list_sheet_workbooks(session, workbook)
+    by_id = {item.id: item for item in sheets}
+    mode = "and" if combine == "and" else "or"
+    target_ids = combine_compare_targets(
+        [item.id for item in sheets],
+        workbook.id,
+        sheet_ids or [],
+        range_from,
+        range_to,
+        mode,
+    )
+    return sheets, [by_id[sheet_id] for sheet_id in target_ids], mode
+
+
+def compare_cell_across_sheets(
+    session: Session,
+    workbook: Workbook,
+    parameter_key: str,
+    column_key: str,
+    *,
+    sheet_ids: list[str] | None = None,
+    range_from: str | None = None,
+    range_to: str | None = None,
+    combine: str = "or",
+) -> dict:
+    _sheets, targets, mode = _resolved_compare_targets(
+        session, workbook, sheet_ids, range_from, range_to, combine
+    )
+    current_value = _cell_compare_value(workbook, parameter_key, column_key)
+    rows = []
+    for sheet in targets:
+        value = _cell_compare_value(sheet, parameter_key, column_key)
+        rows.append(
+            {
+                "sheet_id": sheet.id,
+                "sheet_name": sheet.sheet_name,
+                "value": value,
+                "differs": values_differ(current_value, value),
+            }
+        )
+    return {
+        "parameter_key": parameter_key,
+        "column_key": column_key,
+        "combine": mode,
+        "current": {
+            "sheet_id": workbook.id,
+            "sheet_name": workbook.sheet_name,
+            "value": current_value,
+            "differs": False,
+        },
+        "targets": rows,
+        "differs_any": any(item["differs"] for item in rows),
+        "differs_all": bool(rows) and all(item["differs"] for item in rows),
+    }
+
+
+def compare_sheet_across_sheets(
+    session: Session,
+    workbook: Workbook,
+    *,
+    sheet_ids: list[str] | None = None,
+    range_from: str | None = None,
+    range_to: str | None = None,
+    combine: str = "or",
+) -> dict:
+    _sheets, targets, mode = _resolved_compare_targets(
+        session, workbook, sheet_ids, range_from, range_to, combine
+    )
+    current_map = _sheet_value_map(workbook)
+    target_maps = [(sheet, _sheet_value_map(sheet)) for sheet in targets]
+    keys = set(current_map)
+    for _sheet, values in target_maps:
+        keys.update(values)
+    payload = workbook_payload(session, workbook)
+    by_key = {(cell["parameter_key"], cell["column_key"]): dict(cell) for cell in payload["cells"]}
+    changed = 0
+    for key in keys:
+        parameter_key, column_key = key
+        current_value = current_map.get(key)
+        against = []
+        for sheet, values in target_maps:
+            other = values.get(key)
+            if values_differ(current_value, other):
+                against.append(
+                    {
+                        "sheet_id": sheet.id,
+                        "sheet_name": sheet.sheet_name,
+                        "value": other,
+                        "differs": True,
+                    }
+                )
+        cell = by_key.get(key) or {
+            "parameter_key": parameter_key,
+            "column_key": column_key,
+            "value": current_value,
+            "draft_value": None,
+            "status": "empty",
+            "hyperlink": None,
+            "display": current_value,
+            "locked": True,
+            "unified": False,
+            "updated_at": None,
+            "updated_by": None,
+            "options": options_for(parameter_key),
+            "last_change_id": None,
+        }
+        cell["excel_highlight"] = False
+        cell["compare_highlight"] = bool(against)
+        cell["compare_against"] = against
+        if against:
+            changed += 1
+        by_key[key] = cell
+    payload["cells"] = list(by_key.values())
+    payload["is_issued"] = True
+    payload["show_change_highlight"] = True
+    return {
+        "combine": mode,
+        "workbook": payload,
+        "catalog": catalog_payload(workbook),
+        "targets": [
+            {"sheet_id": sheet.id, "sheet_name": sheet.sheet_name, "value": None, "differs": False}
+            for sheet in targets
+        ],
+        "changed_count": changed,
+    }
 
 
 def latest_cell_comment(
@@ -1476,8 +2055,12 @@ def workbook_payload(session: Session, workbook: Workbook) -> dict:
         "sheet_order": workbook.sheet_order,
         "is_primary": workbook.is_primary,
         "is_issued": bool(workbook.is_issued),
+        "issued_kind": normalize_issued_kind(getattr(workbook, "issued_kind", None), bool(workbook.is_issued)),
+        "is_base": bool(workbook.is_base),
+        "show_change_highlight": bool(workbook.show_change_highlight),
         "cells": [cell_to_dict(cell, workbook) for cell in effective_cells(workbook)],
         "unsaved_count": len(unsaved),
+        "report_notes": report_notes(workbook),
     }
 
 

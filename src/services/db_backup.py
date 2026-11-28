@@ -18,6 +18,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from src.paths import db_path
+from src.services.db_json import JSON_FILE_NAME, export_database_json, json_database_path
 
 BACKUP_DIR_NAME = "бекап"
 DAILY_DIR_NAME = "дневные"
@@ -211,13 +212,22 @@ def write_data_snapshot(
     tmp = Path(str(folder) + ".tmp")
     try:
         tmp.mkdir(parents=True)
+        try:
+            export_database_json(database)
+        except Exception:
+            pass
         target = tmp / DATA_FILE_NAME
         _copy_database(database, target)
-        digest = file_sha256(target)
+        files = {DATA_FILE_NAME: {"sha256": file_sha256(target), "size": target.stat().st_size}}
+        json_source = json_database_path(database)
+        if json_source is not None and json_source.is_file():
+            json_target = tmp / JSON_FILE_NAME
+            shutil.copy2(json_source, json_target)
+            files[JSON_FILE_NAME] = {"sha256": file_sha256(json_target), "size": json_target.stat().st_size}
         payload = {
             "kind": kind,
             "created_at": (now or datetime.now()).isoformat(timespec="seconds"),
-            "files": {DATA_FILE_NAME: {"sha256": digest, "size": target.stat().st_size}},
+            "files": files,
         }
         (tmp / "manifest.json").write_text(
             json.dumps(payload, ensure_ascii=False, indent=2) + "\n",

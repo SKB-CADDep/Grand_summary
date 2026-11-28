@@ -2,7 +2,25 @@ from pathlib import Path
 
 from PyQt6.QtCore import QEvent, QObject, Qt
 from PyQt6.QtGui import QBitmap, QColor, QPainter, QPalette, QRegion
-from PyQt6.QtWidgets import QApplication, QWidget
+from PyQt6.QtWidgets import QApplication, QDialog, QWidget
+
+INDEPENDENT_WINDOW_FLAGS = (
+    Qt.WindowType.Window
+    | Qt.WindowType.CustomizeWindowHint
+    | Qt.WindowType.WindowTitleHint
+    | Qt.WindowType.WindowSystemMenuHint
+    | Qt.WindowType.WindowMinimizeButtonHint
+    | Qt.WindowType.WindowMaximizeButtonHint
+    | Qt.WindowType.WindowCloseButtonHint
+)
+
+
+def configure_independent_window(widget: QWidget) -> None:
+    """Отдельное окно: свернуть, развернуть и закрыть, как у основного приложения."""
+    widget.setWindowFlags(INDEPENDENT_WINDOW_FLAGS)
+    widget.setWindowModality(Qt.WindowModality.NonModal)
+    if isinstance(widget, QDialog):
+        widget.setSizeGripEnabled(True)
 
 APP_QSS = """
 QMainWindow, QDialog, QWidget {
@@ -108,10 +126,61 @@ QPushButton[sheetTab="true"]:checked {
   border-bottom-color: #ffffff;
   font-weight: 600;
 }
+QPushButton[sheetTab="true"][mainSheet="true"] {
+  background: #1d6fd0;
+  color: #ffffff;
+  border-color: #1558a8;
+}
+QPushButton[sheetTab="true"][mainSheet="true"]:checked {
+  background: #1558a8;
+  color: #ffffff;
+  border-color: #0f4a91;
+  border-bottom-color: #1558a8;
+  font-weight: 600;
+}
+QPushButton[sheetTab="true"][mainSheet="true"]:disabled {
+  background: #7aa7d9;
+  color: #eef5fc;
+  border-color: #6b98c8;
+}
+QPushButton[sheetTab="true"][baseSheet="true"] {
+  background: #6b7380;
+  color: #ffffff;
+  border-color: #565e6a;
+}
+QPushButton[sheetTab="true"][baseSheet="true"]:checked {
+  background: #565e6a;
+  color: #ffffff;
+  border-color: #454c56;
+  border-bottom-color: #565e6a;
+  font-weight: 600;
+}
+QPushButton[sheetTab="true"][baseSheet="true"]:disabled {
+  background: #9aa2ad;
+  color: #f3f4f6;
+  border-color: #8a929c;
+}
 QFrame#sheet-tabs {
   background: transparent;
   border: none;
   border-bottom: 1px solid #d9e3f0;
+}
+QToolButton#sheet-versions-toggle {
+  background: transparent;
+  color: #9aabb8;
+  border: none;
+  padding: 2px 0;
+  margin: 0;
+  min-width: 16px;
+  max-width: 16px;
+}
+QToolButton#sheet-versions-toggle:hover {
+  background: transparent;
+  color: #6b7c8a;
+}
+QToolButton#sheet-versions-toggle:disabled {
+  background: transparent;
+  color: #c5d0d8;
 }
 QTableWidget#id-sheet {
   border-radius: 0;

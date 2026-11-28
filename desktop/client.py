@@ -101,11 +101,33 @@ class ApiClient:
     def unset_primary_sheet(self, workbook_id: str, sheet_id: str) -> dict:
         return self._json(self._http.patch(f"/api/workbooks/{workbook_id}/sheets/{sheet_id}/ordinary"))
 
-    def set_sheet_issued(self, workbook_id: str, sheet_id: str, issued: bool) -> dict:
+    def set_change_highlight(self, workbook_id: str, sheet_id: str, enabled: bool) -> dict:
+        return self._json(
+            self._http.patch(
+                f"/api/workbooks/{workbook_id}/sheets/{sheet_id}/change-highlight",
+                json={"enabled": enabled},
+            )
+        )
+
+    def set_base_sheet(self, workbook_id: str, sheet_id: str) -> dict:
+        return self._json(self._http.patch(f"/api/workbooks/{workbook_id}/sheets/{sheet_id}/base"))
+
+    def issue_version(self, workbook_id: str, issued_kind: str = "preliminary") -> dict:
+        return self._json(
+            self._http.post(
+                f"/api/workbooks/{workbook_id}/issue-version",
+                json={"issued_kind": issued_kind},
+            )
+        )
+
+    def set_sheet_issued(self, workbook_id: str, sheet_id: str, issued: bool, issued_kind: str = "") -> dict:
+        payload = {"issued": issued}
+        if issued_kind:
+            payload["issued_kind"] = issued_kind
         return self._json(
             self._http.patch(
                 f"/api/workbooks/{workbook_id}/sheets/{sheet_id}/issued",
-                json={"issued": issued},
+                json=payload,
             )
         )
 
@@ -158,6 +180,23 @@ class ApiClient:
     def history(self, workbook_id: str, parameter_key: str, column_key: str) -> list[dict]:
         return self._json(self._http.get(f"/api/workbooks/{workbook_id}/cells/{parameter_key}/{column_key}/history"))
 
+    def compare_cell(
+        self,
+        workbook_id: str,
+        parameter_key: str,
+        column_key: str,
+        body: dict,
+    ) -> dict:
+        return self._json(
+            self._http.post(
+                f"/api/workbooks/{workbook_id}/cells/{parameter_key}/{column_key}/compare",
+                json=body,
+            )
+        )
+
+    def compare_sheet(self, workbook_id: str, body: dict) -> dict:
+        return self._json(self._http.post(f"/api/workbooks/{workbook_id}/compare-sheet", json=body))
+
     def last_cell_comment(self, workbook_id: str, parameter_key: str, column_key: str) -> str | None:
         data = self._json(self._http.get(f"/api/workbooks/{workbook_id}/cells/{parameter_key}/{column_key}/last-comment"))
         return data.get("comment") if isinstance(data, dict) else None
@@ -195,6 +234,17 @@ class ApiClient:
     def export_excel(self, workbook_id: str, scope: str) -> bytes:
         return self._bytes(self._http.get(f"/api/workbooks/{workbook_id}/export-excel", params={"scope": scope}))
 
+    def add_report_note(self, workbook_id: str, parameter_key: str, column_key: str, text: str) -> list:
+        return self._json(
+            self._http.post(
+                f"/api/workbooks/{workbook_id}/report-notes",
+                json={"parameter_key": parameter_key, "column_key": column_key, "text": text},
+            )
+        )
+
+    def delete_report_note(self, workbook_id: str, note_id: str) -> list:
+        return self._json(self._http.delete(f"/api/workbooks/{workbook_id}/report-notes/{note_id}"))
+
     def export_report_table(self, workbook_id: str, parameter_keys: list[str], column_keys: list[str], table_number: int = 1) -> bytes:
         return self._bytes(
             self._http.post(
@@ -225,6 +275,12 @@ class ApiClient:
 
     def read_notification(self, note_id: str) -> dict:
         return self._json(self._http.post(f"/api/notifications/{note_id}/read"))
+
+    def notification_settings(self) -> dict:
+        return self._json(self._http.get("/api/notification-settings"))
+
+    def save_notification_settings(self, body: dict) -> dict:
+        return self._json(self._http.put("/api/notification-settings", json=body))
 
     def update_status(self) -> dict:
         return self._json(self._http.get("/api/updates"))

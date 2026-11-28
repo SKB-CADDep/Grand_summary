@@ -22,6 +22,7 @@ ACTION_LABELS = {
     "triangle_sync": "Синхронизация треугольников",
     "project_saved": "Проект сохранён",
     "version": "Версия",
+    "version_issued": "Версия выдана",
     "report": "Сводка",
 }
 

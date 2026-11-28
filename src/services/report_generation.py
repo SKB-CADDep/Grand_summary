@@ -20,6 +20,7 @@ from src.services.workbooks import (
     _display,
     effective_cells,
     hyperlinks_map,
+    report_notes,
     snapshot_cells,
     workbook_columns,
     workbook_parameters,
@@ -28,10 +29,40 @@ from src.services.workbooks import (
 HEADER_FILL = "D9EAF7"
 YELLOW = "FFFF99"
 GREEN = "C6EFCE"
-_PAGE_CONTENT_TWIPS = 15827
+_A3_LANDSCAPE_WIDTH = Mm(420)
+_A3_LANDSCAPE_HEIGHT = Mm(297)
+_MARGIN_LR_EMU = 320040
+_MARGIN_TB_EMU = 365760
+_PAGE_CONTENT_TWIPS = (15_120_000 - 2 * _MARGIN_LR_EMU) // 635
 _NAME_WIDTH = 4431
 _DESIGNATION_WIDTH = 1280
 _UNIT_WIDTH = 1108
+_MIN_STAGE_WIDTH = 700
+_FROZEN_HEADERS = ("Наименование параметра", "Обозначение", "Ед. изм.")
+REPORT_NOTE_NAME = "__name__"
+REPORT_NOTE_UNIT = "__unit__"
+_SUPER_DIGITS = str.maketrans("0123456789", "⁰¹²³⁴⁵⁶⁷⁸⁹")
+
+
+def note_marker(number: int) -> str:
+    return "*" + str(number).translate(_SUPER_DIGITS)
+
+
+def format_cell_with_notes(value: str, numbers: list[int]) -> str:
+    suffix = "".join(note_marker(item) for item in numbers)
+    return f"{value or ''}{suffix}"
+
+
+def notes_for_export(notes: list[dict], parameter_keys: set[str], column_keys: set[str]) -> list[dict]:
+    exported = []
+    for note in notes:
+        param = note.get("parameter_key") or ""
+        column = note.get("column_key") or ""
+        if param not in parameter_keys:
+            continue
+        if column in {REPORT_NOTE_NAME, REPORT_NOTE_UNIT} or column in column_keys:
+            exported.append(note)
+    return exported
 _PAREN_GROUPS = re.compile(r"\(([^()]*)\)")
 _FACTORY_NUMBER = re.compile(r"\(зав\.([^)]+)\)")
 
@@ -423,12 +454,32 @@ def _rows_for_export(parameters: list[dict], selected_keys: set[str]) -> list[di
     return rows
 
 
+def _apply_a3_landscape(section) -> None:
+    section.orientation = WD_ORIENT.LANDSCAPE
+    section.page_width = _A3_LANDSCAPE_WIDTH
+    section.page_height = _A3_LANDSCAPE_HEIGHT
+    section.left_margin = Emu(_MARGIN_LR_EMU)
+    section.right_margin = Emu(_MARGIN_LR_EMU)
+    section.top_margin = Emu(_MARGIN_TB_EMU)
+    section.bottom_margin = Emu(_MARGIN_TB_EMU)
+
+
+def _max_stage_columns() -> int:
+    remaining = _PAGE_CONTENT_TWIPS - _NAME_WIDTH - _DESIGNATION_WIDTH - _UNIT_WIDTH
+    return max(1, remaining // _MIN_STAGE_WIDTH)
+
+
+def _column_chunks(columns: list) -> list[list]:
+    size = _max_stage_columns()
+    return [columns[index : index + size] for index in range(0, len(columns), size)]
+
+
 def _column_widths(stage_count: int) -> list[int]:
     name, designation, unit = _NAME_WIDTH, _DESIGNATION_WIDTH, _UNIT_WIDTH
     remaining = _PAGE_CONTENT_TWIPS - name - designation - unit
     count = max(stage_count, 1)
     share = remaining // count
-    stage = share if share >= 700 else max(500, share)
+    stage = share if share >= _MIN_STAGE_WIDTH else max(_MIN_STAGE_WIDTH, share)
     widths = [name, designation, unit] + [stage] * stage_count
     slack = _PAGE_CONTENT_TWIPS - sum(widths)
     if slack > 0:
@@ -436,17 +487,7 @@ def _column_widths(stage_count: int) -> list[int]:
     return widths
 
 
-def _write_table_cell(tc, text: str, width: int, fill: str | None = None) -> None:
-    for child in list(tc):
-        if child.tag == qn("w:p"):
-            tc.remove(child)
-    paragraph = OxmlElement("w:p")
-    paragraph_props = OxmlElement("w:pPr")
-    spacing = OxmlElement("w:spacing")
-    spacing.set(qn("w:before"), "0")
-    spacing.set(qn("w:after"), "0")
-    paragraph_props.append(spacing)
-    paragraph.append(paragraph_props)
+def _cell_run(text: str, superscript: bool = False) -> object:
     run = OxmlElement("w:r")
     run_props = OxmlElement("w:rPr")
     fonts = OxmlElement("w:rFonts")
@@ -457,6 +498,10 @@ def _write_table_cell(tc, text: str, width: int, fill: str | None = None) -> Non
     size_cs = OxmlElement("w:szCs")
     size_cs.set(qn("w:val"), "20")
     run_props.extend((fonts, size, size_cs))
+    if superscript:
+        align = OxmlElement("w:vertAlign")
+        align.set(qn("w:val"), "superscript")
+        run_props.append(align)
     run.append(run_props)
     text_el = OxmlElement("w:t")
     value = text or ""
@@ -464,7 +509,32 @@ def _write_table_cell(tc, text: str, width: int, fill: str | None = None) -> Non
         text_el.set(qn("xml:space"), "preserve")
     text_el.text = value
     run.append(text_el)
-    paragraph.append(run)
+    return run
+
+
+def _write_table_cell(
+    tc,
+    text: str,
+    width: int,
+    fill: str | None = None,
+    note_numbers: list[int] | None = None,
+) -> None:
+    for child in list(tc):
+        if child.tag == qn("w:p"):
+            tc.remove(child)
+    paragraph = OxmlElement("w:p")
+    paragraph_props = OxmlElement("w:pPr")
+    spacing = OxmlElement("w:spacing")
+    spacing.set(qn("w:before"), "0")
+    spacing.set(qn("w:after"), "0")
+    paragraph_props.append(spacing)
+    paragraph.append(paragraph_props)
+    value = text or ""
+    if value or not note_numbers:
+        paragraph.append(_cell_run(value))
+    for number in note_numbers or []:
+        paragraph.append(_cell_run("*"))
+        paragraph.append(_cell_run(str(number), superscript=True))
     tc.append(paragraph)
     tc_pr = tc.find(qn("w:tcPr"))
     if tc_pr is None:
@@ -523,6 +593,11 @@ def build_id_table_docx(
     if not columns:
         raise ValueError("Нет выбранных столбцов")
     cells = {(cell.parameter_key, cell.column_key): cell for cell in effective_cells(workbook)}
+    notes = report_notes(workbook)
+    notes_by_cell: dict[tuple[str, str], list[int]] = {}
+    for note in notes:
+        notes_by_cell.setdefault((note["parameter_key"], note["column_key"]), []).append(note["number"])
+    exported_notes = notes_for_export(notes, {item["key"] for item in parameters}, {item["key"] for item in columns})
     obj = workbook.object
     cylinder = obj.cylinder or "ЦСД"
     group_key = editable[0].get("group") or ""
@@ -532,44 +607,85 @@ def build_id_table_docx(
     normal = document.styles["Normal"]
     normal.font.name = "Times New Roman"
     normal.font.size = Pt(10)
-    section = document.sections[0]
-    section.orientation = WD_ORIENT.LANDSCAPE
-    section.page_width = Mm(297)
-    section.page_height = Mm(210)
-    section.left_margin = Emu(320040)
-    section.right_margin = Emu(320040)
-    section.top_margin = Emu(365760)
-    section.bottom_margin = Emu(365760)
+    _apply_a3_landscape(document.sections[0])
 
-    title = document.add_paragraph()
-    title.alignment = WD_ALIGN_PARAGRAPH.LEFT
-    title.paragraph_format.space_after = Pt(6)
-    _set_run_font(title.add_run(_table_caption(obj, table_number, group_title)), 12)
-
-    widths = _column_widths(len(columns))
-    table = document.add_table(rows=1 + len(parameters), cols=3 + len(columns))
-    table.style = "Table Grid"
-    _fix_table_layout(table, widths)
-    headers = ["Наименование параметра", "Обозначение", "Ед. изм."] + [
-        column.get("label") or column["key"] for column in columns
-    ]
-    body = [headers]
+    frozen_rows: list[list[str]] = []
     for parameter in parameters:
         section_row = parameter.get("row_kind") == "section"
-        row = [
-            parameter_display_label(parameter),
-            "" if section_row else parameter_designation(parameter),
-            "" if section_row else (parameter.get("unit") or ""),
-        ]
-        for column in columns:
-            cell = None if section_row else cells.get((parameter["key"], column["key"]))
-            row.append(_display(cell) if cell else "")
-        body.append(row)
-    for row_index, row in enumerate(body):
-        fill = HEADER_FILL if row_index == 0 or parameters[row_index - 1].get("row_kind") == "section" else None
-        for tc, text, width in zip(table._tbl.tr_lst[row_index].tc_lst, row, widths):
-            _write_table_cell(tc, text or "", width, fill)
+        frozen_rows.append(
+            [
+                parameter_display_label(parameter),
+                "" if section_row else parameter_designation(parameter),
+                "" if section_row else (parameter.get("unit") or ""),
+            ]
+        )
+
+    for chunk_index, chunk in enumerate(_column_chunks(columns)):
+        caption = document.add_paragraph()
+        caption.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        caption.paragraph_format.space_before = Pt(10 if chunk_index else 0)
+        caption.paragraph_format.space_after = Pt(6)
+        caption_text = (
+            _table_caption(obj, table_number, group_title)
+            if chunk_index == 0
+            else f"Продолжение таблицы {table_number}"
+        )
+        _set_run_font(caption.add_run(caption_text), 12)
+        _add_id_data_table(document, parameters, chunk, frozen_rows, cells, notes_by_cell)
+
+    _add_report_note_list(document, exported_notes)
 
     buffer = BytesIO()
     document.save(buffer)
     return buffer.getvalue()
+
+
+def _add_id_data_table(
+    document,
+    parameters: list[dict],
+    columns: list[dict],
+    frozen_rows: list[list[str]],
+    cells: dict,
+    notes_by_cell: dict[tuple[str, str], list[int]] | None = None,
+) -> None:
+    notes_by_cell = notes_by_cell or {}
+    widths = _column_widths(len(columns))
+    table = document.add_table(rows=1 + len(parameters), cols=3 + len(columns))
+    table.style = "Table Grid"
+    _fix_table_layout(table, widths)
+    header_row = [(text, None) for text in list(_FROZEN_HEADERS) + [column.get("label") or column["key"] for column in columns]]
+    body = [header_row]
+    for frozen, parameter in zip(frozen_rows, parameters):
+        key = parameter.get("key") or ""
+        section_row = parameter.get("row_kind") == "section"
+        row = [
+            (frozen[0], notes_by_cell.get((key, REPORT_NOTE_NAME))),
+            (frozen[1], None),
+            (frozen[2], notes_by_cell.get((key, REPORT_NOTE_UNIT))),
+        ]
+        for column in columns:
+            cell = None if section_row else cells.get((parameter["key"], column["key"]))
+            row.append(
+                (
+                    _display(cell) if cell else "",
+                    None if section_row else notes_by_cell.get((parameter["key"], column["key"])),
+                )
+            )
+        body.append(row)
+    for row_index, row in enumerate(body):
+        fill = HEADER_FILL if row_index == 0 or parameters[row_index - 1].get("row_kind") == "section" else None
+        for tc, (text, numbers), width in zip(table._tbl.tr_lst[row_index].tc_lst, row, widths):
+            _write_table_cell(tc, text or "", width, fill, numbers)
+
+
+def _add_report_note_list(document, notes: list[dict]) -> None:
+    if not notes:
+        return
+    spacer = document.add_paragraph()
+    spacer.paragraph_format.space_before = Pt(8)
+    spacer.paragraph_format.space_after = Pt(2)
+    _set_run_font(spacer.add_run("Примечания"), 11)
+    for note in notes:
+        paragraph = document.add_paragraph()
+        paragraph.paragraph_format.space_after = Pt(2)
+        _set_run_font(paragraph.add_run(f"*{note['number']} {note['text']}"), 10)

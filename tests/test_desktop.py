@@ -53,9 +53,15 @@ def test_native_ui_imports_without_webengine():
     assert "структуру шапки" in table_source
     assert "clear_highlight_btn" not in table_source
     assert "Снять оранжевую подсветку" in table_source
+    assert "Копировать" in table_source
+    assert "_paste_cells" in table_source
+    assert "Отметить как выданный" in table_source
+    assert "Тип выдачи" in table_source
     assert "edit_btn.setVisible" in table_source
     report_source = inspect.getsource(ReportPage)
     assert "Предпросмотр таблицы" in report_source
+    assert "Выдать версию" in report_source
+    assert "Добавить примечание" in report_source
     from desktop.ui.report_page import PreviewHeader, _COLUMN_GROUP_TITLES
 
     assert _COLUMN_GROUP_TITLES["stage"] == "Ступени"
@@ -89,6 +95,7 @@ def test_native_ui_imports_without_webengine():
     assert _status_color({"status": "confirmed"}, "editable").name() == CONFIRMED
     assert _status_color({"status": "initial", "excel_highlight": True}, "editable").name() == IMPORTED
     assert _status_color({"status": "initial", "excel_highlight": True}, "editable", show_changes=False) is None
+    assert _status_color({"status": "confirmed"}, "editable", show_changes=False).name() == CONFIRMED
     assert _status_color({"status": "computed"}, "editable").name() == COMPUTED
     assert _status_color({"status": "empty"}, "section").name() == COMPUTED
 
@@ -141,6 +148,52 @@ def test_object_search_popup_closes_after_pick(monkeypatch):
     page._pick(page.suggestions.item(0))
     assert not page.popup.isVisible()
     assert page.search.text() == "Турбина А-1"
+    app.processEvents()
+
+
+def test_object_tab_shows_work_summary(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtCore import QPoint
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    from desktop.ui.object_page import ObjectPage
+
+    page = ObjectPage()
+    opened: list[str] = []
+    page.object_open_table_requested.connect(opened.append)
+    page.set_objects(
+        [
+            {"id": "1", "name": "Черновик", "has_workbook": False},
+            {
+                "id": "2",
+                "name": "Станция Север",
+                "station": "Север",
+                "turbine": "К-300",
+                "has_workbook": True,
+                "sheet_count": 3,
+                "workbook_updated_at": "2026-11-28T10:00:00+00:00",
+                "last_edited_by": "petr",
+                "started_by": "ivan",
+            },
+        ],
+        "",
+    )
+    assert page.work_table.rowCount() == 1
+    assert "есть сводка" in page.work_hint.text()
+    assert page.work_table.item(0, 0).text() == "Станция Север"
+    assert page.work_table.item(0, 3).text() == "3"
+    assert page.work_table.horizontalHeaderItem(5).text() == "Кто изменил"
+    assert page.work_table.item(0, 5).text() == "petr"
+    assert page.work_table.item(0, 6).text() == "ivan"
+    page._open_work_row(0, 0)
+    assert opened == ["2"]
+    page.work_table.selectRow(0)
+    assert page.work_table.currentRow() == 0
+    page._clear_work_selection_if_empty(QPoint(0, 0))
+    assert page.work_table.currentRow() == 0
+    page._clear_work_selection_if_empty(QPoint(8, 4000))
+    assert page.work_table.selectedItems() == []
     app.processEvents()
 
 
@@ -528,6 +581,40 @@ def test_unread_notes_highlight_the_button(monkeypatch):
     app.processEvents()
 
 
+def test_notifications_dialog_has_settings_button(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication, QPushButton
+
+    app = QApplication.instance() or QApplication([])
+    from desktop.ui.dialogs import NotificationSettingsDialog, NotificationsDialog
+
+    dialog = NotificationsDialog([{"id": "n1", "message": "Пётр изменил ячейку"}])
+    opened: list[bool] = []
+    dialog.settings_requested.connect(lambda: opened.append(True))
+    button = next(item for item in dialog.findChildren(QPushButton) if item.text() == "Настроить уведомления")
+    button.click()
+    assert opened == [True]
+    settings = NotificationSettingsDialog(
+        {
+            "watch_my_cells": True,
+            "objects": [
+                {
+                    "object_id": "obj",
+                    "object_name": "Станция Север",
+                    "enabled": True,
+                    "watch_my_cells": True,
+                    "watch_all_cells": False,
+                }
+            ],
+        }
+    )
+    assert settings.watch_mine.isChecked() is True
+    settings.table.cellWidget(0, 1).setChecked(False)
+    payload = settings.payload()
+    assert payload["objects"][0]["enabled"] is False
+    app.processEvents()
+
+
 def test_user_journal_is_its_own_menu_button(monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     from PyQt6.QtWidgets import QApplication, QPushButton
@@ -569,6 +656,106 @@ def test_history_presentation_opens_from_the_history_panel(monkeypatch):
     page.history_position_requested.connect(chosen.append)
     next(action for action in menu.actions() if action.text() == "Справа").trigger()
     assert chosen == ["right"]
+    app.processEvents()
+
+
+def test_sheet_compare_opens_id_table_with_orange_diffs(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtWidgets import QApplication, QCheckBox
+
+    app = QApplication.instance() or QApplication([])
+    from desktop.ui.compare_window import SheetCompareWindow
+    from desktop.ui.style import IMPORTED
+    from desktop.ui.table_page import DATA_COLUMN, TablePage, _status_color
+
+    page = TablePage()
+    page.set_data(
+        object_name="Объект",
+        catalog={"parameters": [], "columns": []},
+        workbook={"id": "main", "is_primary": True, "is_issued": False, "cells": [], "sheet_name": "Основная таблица"},
+        unsaved=[],
+        sheets=[
+            {"id": "main", "name": "Основная таблица", "is_primary": True},
+            {"id": "a", "name": "15.03.2026", "is_issued": True},
+            {"id": "b", "name": "01.04.2026", "is_issued": True},
+        ],
+        can_write=True,
+        busy=False,
+    )
+    labels = [action.text() for action in page._sheet_context_menu("main").actions()]
+    assert "Сравнить данные" in labels
+
+    window = SheetCompareWindow(
+        client=None,
+        source_id="main",
+        source_name="Основная таблица",
+        sheets=[
+            {"id": "main", "name": "Основная таблица"},
+            {"id": "a", "name": "15.03.2026"},
+            {"id": "b", "name": "01.04.2026"},
+        ],
+    )
+    assert [box.text() for box in window.findChildren(QCheckBox)] == ["15.03.2026", "01.04.2026"]
+    window.findChildren(QCheckBox)[0].setChecked(True)
+    window.range_from.setCurrentIndex(window.range_from.findData("a"))
+    window.range_to.setCurrentIndex(window.range_to.findData("b"))
+    assert window.selection() == {
+        "sheet_ids": ["a"],
+        "range_from": "a",
+        "range_to": "b",
+        "combine": "or",
+    }
+    flags = window.windowFlags()
+    assert flags & Qt.WindowType.WindowMinimizeButtonHint
+    assert flags & Qt.WindowType.WindowMaximizeButtonHint
+    assert flags & Qt.WindowType.WindowCloseButtonHint
+    window.show_result(
+        {
+            "changed_count": 1,
+            "targets": [{"sheet_id": "a", "sheet_name": "15.03.2026"}],
+            "catalog": {
+                "parameters": [{"key": "r010", "label": "Высота", "row_kind": "editable", "indent": 1, "unit": "мм"}],
+                "columns": [{"key": "s1", "label": "1", "kind": "stage"}],
+            },
+            "workbook": {
+                "id": "main",
+                "is_issued": True,
+                "show_change_highlight": True,
+                "cells": [
+                    {
+                        "parameter_key": "r010",
+                        "column_key": "s1",
+                        "value": "140",
+                        "display": "140",
+                        "status": "initial",
+                        "compare_highlight": True,
+                        "compare_against": [{"sheet_name": "15.03.2026", "value": "130", "differs": True}],
+                    }
+                ],
+            },
+        }
+    )
+    assert window.stack.currentIndex() == 1
+    assert window.table_page.history_panel.isHidden() is False
+    item = window.table_page.table.item(0, DATA_COLUMN)
+    assert item.text() == "140"
+    assert item.background().color().name() == IMPORTED
+    assert _status_color(
+        {"status": "initial", "compare_highlight": True}, "editable"
+    ).name() == IMPORTED
+    window.table_page.set_history(
+        [
+            {
+                "created_at": "2026-03-15T00:00:00+00:00",
+                "author": "user",
+                "old_value": "120",
+                "new_value": "140",
+                "comment": "Изменение листа «15.03.2026»",
+            }
+        ]
+    )
+    assert window.table_page.history_table.item(0, 4).text() == "Изменение листа «15.03.2026»"
     app.processEvents()
 
 
@@ -702,31 +889,215 @@ def test_id_table_link_cell_uses_pointing_hand(monkeypatch):
     app.processEvents()
 
 
+def test_base_sheet_is_read_only_in_the_table(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    from desktop.ui.table_page import TablePage
+
+    page = TablePage()
+    page.set_data(
+        object_name="Объект",
+        catalog={"columns": [{"key": "s1", "label": "1"}], "parameters": []},
+        workbook={"id": "base", "is_primary": False, "is_issued": False, "is_base": True, "cells": []},
+        unsaved=[],
+        sheets=[
+            {"id": "work", "name": "Основная таблица", "is_primary": True, "is_issued": False, "is_base": False},
+            {"id": "base", "name": "База (28.11.2026)", "is_primary": False, "is_issued": False, "is_base": True},
+        ],
+        can_write=True,
+        busy=False,
+    )
+    assert page.edit_btn.isHidden()
+    assert "Базовый лист" in page.mode_hint.text()
+    assert page.sheet_bar.buttons["base"].toolTip() == "Базовый лист. Только просмотр."
+    assert page.sheet_bar.buttons["base"].property("baseSheet") is True
+    assert page.sheet_bar.buttons["work"].property("baseSheet") is False
+    assert page.sheet_bar.buttons["work"].property("mainSheet") is True
+    assert page.sheet_bar._toggle is not None
+    app.processEvents()
+
+
 def test_issued_sheet_shows_flag_and_is_read_only(monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     from PyQt6.QtWidgets import QApplication
 
     app = QApplication.instance() or QApplication([])
+    from desktop.ui.style import CONFIRMED
     from desktop.ui.table_page import TablePage, _status_color
 
     page = TablePage()
     page.set_data(
         object_name="Объект",
         catalog={"columns": [{"key": "s1", "label": "1"}], "parameters": []},
-        workbook={"id": "issued", "is_primary": False, "is_issued": True, "cells": []},
+        workbook={"id": "issued", "is_primary": False, "is_issued": True, "show_change_highlight": False, "cells": []},
         unsaved=[],
         sheets=[
-            {"id": "primary", "name": "Исходные данные", "is_primary": True, "is_issued": False},
-            {"id": "issued", "name": "01.04.2026", "is_primary": False, "is_issued": True},
+            {"id": "primary", "name": "Основная таблица", "is_primary": True, "is_issued": False},
+            {"id": "issued", "name": "01.04.2026", "is_primary": False, "is_issued": True, "issued_kind": "preliminary"},
         ],
         can_write=True,
         busy=False,
     )
     assert page.edit_btn.isHidden()
     assert page.sheet_bar.buttons["issued"].icon().isNull() is False
+    assert "Предварительные данные" in page.sheet_bar.buttons["issued"].toolTip()
     assert page.sheet_bar.buttons["primary"].icon().isNull()
+    assert page.sheet_bar.buttons["primary"].property("mainSheet") is True
+    assert page.sheet_bar.buttons["issued"].property("mainSheet") is False
     assert "только для просмотра" in page.mode_hint.text()
-    assert _status_color({"status": "confirmed"}, "editable", show_changes=False) is None
+    assert "Предварительные данные" in page.mode_hint.text()
+    assert page._show_change_highlight() is False
+    page.workbook["show_change_highlight"] = True
+    assert page._show_change_highlight() is True
+    assert _status_color({"status": "confirmed"}, "editable", show_changes=False).name() == CONFIRMED
+    app.processEvents()
+
+
+def test_issued_sheet_kinds_use_flag_or_circle(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    from desktop.ui.table_page import TablePage
+
+    page = TablePage()
+    page.set_data(
+        object_name="Объект",
+        catalog={"columns": [{"key": "s1", "label": "1"}], "parameters": []},
+        workbook={"id": "main", "is_primary": True, "is_issued": False, "cells": []},
+        unsaved=[],
+        sheets=[
+            {"id": "main", "name": "Основная таблица", "is_primary": True, "is_issued": False},
+            {"id": "pre", "name": "01.04.2026", "is_issued": True, "issued_kind": "preliminary"},
+            {"id": "fin", "name": "02.04.2026", "is_issued": True, "issued_kind": "final"},
+            {"id": "upd", "name": "03.04.2026", "is_issued": True, "issued_kind": "update"},
+        ],
+        can_write=True,
+        busy=False,
+    )
+    assert "Предварительные данные" in page.sheet_bar.buttons["pre"].toolTip()
+    assert "Конечные данные" in page.sheet_bar.buttons["fin"].toolTip()
+    assert "Обновление" in page.sheet_bar.buttons["upd"].toolTip()
+    assert page.sheet_bar.buttons["pre"].icon().cacheKey() != page.sheet_bar.buttons["fin"].icon().cacheKey()
+    assert page.sheet_bar.buttons["pre"].icon().cacheKey() != page.sheet_bar.buttons["upd"].icon().cacheKey()
+    assert page.sheet_bar._toggle is not None
+    menu = page._sheet_context_menu("pre")
+    titles = [action.text() for action in menu.actions()]
+    assert "Тип выдачи" in titles
+    assert "Снять отметку «Выдано»" in titles
+    create_menu = page._sheet_context_menu("main")
+    assert "Отметить как выданный" not in [action.text() for action in create_menu.actions()]
+    app.processEvents()
+
+
+def test_sheet_tabs_collapse_issued_and_base(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    from desktop.ui.table_page import TablePage
+
+    page = TablePage()
+    selected: list[str] = []
+    page.sheet_selected.connect(selected.append)
+    page.set_data(
+        object_name="Объект",
+        catalog={"columns": [{"key": "s1", "label": "1"}], "parameters": []},
+        workbook={"id": "issued", "is_primary": False, "is_issued": True, "cells": []},
+        unsaved=[],
+        sheets=[
+            {"id": "work", "name": "Основная таблица", "is_primary": True, "is_issued": False, "is_base": False},
+            {"id": "base", "name": "База (28.11.2026)", "is_primary": False, "is_issued": False, "is_base": True},
+            {"id": "issued", "name": "01.04.2026", "is_primary": False, "is_issued": True},
+            {"id": "copy", "name": "Копия", "is_primary": False, "is_issued": False, "is_base": False},
+        ],
+        can_write=True,
+        busy=False,
+    )
+    bar = page.sheet_bar
+    assert bar._toggle is not None
+    assert bar._toggle.arrowType() == Qt.ArrowType.DownArrow
+    assert not bar.buttons["base"].isHidden()
+    assert not bar.buttons["issued"].isHidden()
+    bar._toggle.click()
+    assert bar.buttons["base"].isHidden()
+    assert bar.buttons["issued"].isHidden()
+    assert not bar.buttons["work"].isHidden()
+    assert not bar.buttons["copy"].isHidden()
+    assert bar._toggle.arrowType() == Qt.ArrowType.RightArrow
+    assert selected[-1] == "work"
+    page.set_data(
+        object_name="Объект",
+        catalog={"columns": [{"key": "s1", "label": "1"}], "parameters": []},
+        workbook={"id": "work", "is_primary": True, "is_issued": False, "cells": []},
+        unsaved=[],
+        sheets=[
+            {"id": "work", "name": "Основная таблица", "is_primary": True},
+            {"id": "issued", "name": "01.04.2026", "is_issued": True},
+        ],
+        can_write=True,
+        busy=False,
+    )
+    assert page.sheet_bar.buttons["issued"].isHidden()
+    page.sheet_bar._toggle.click()
+    assert not page.sheet_bar.buttons["issued"].isHidden()
+    app.processEvents()
+
+
+def test_cells_copy_from_any_sheet_and_paste_into_working_table(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    from desktop.ui.sheet_table import FROZEN_COLUMNS
+    from desktop.ui.table_page import TablePage
+
+    catalog = {
+        "columns": [{"key": "s1", "label": "1"}],
+        "parameters": [{"key": "r010", "label": "Высота", "row_kind": "editable", "indent": 1, "unit": "мм"}],
+    }
+    page = TablePage()
+    page.set_data(
+        object_name="Объект",
+        catalog=catalog,
+        workbook={
+            "id": "issued",
+            "is_primary": False,
+            "is_issued": True,
+            "cells": [{"parameter_key": "r010", "column_key": "s1", "value": "130", "display": "130", "status": "initial"}],
+        },
+        unsaved=[],
+        sheets=[
+            {"id": "main", "name": "Основная таблица", "is_primary": True, "is_issued": False},
+            {"id": "issued", "name": "01.04.2026", "is_primary": False, "is_issued": True},
+        ],
+        can_write=True,
+        busy=False,
+    )
+    page.table.setCurrentCell(0, FROZEN_COLUMNS)
+    page._copy_cells()
+    assert QApplication.clipboard().text() == "130"
+    assert page._can_paste() is False
+
+    drafts: list[tuple[str, str, str]] = []
+    page.draft_requested.connect(lambda p, c, v, _h: drafts.append((p, c, v)))
+    page.set_data(
+        object_name="Объект",
+        catalog=catalog,
+        workbook={"id": "main", "is_primary": True, "is_issued": False, "cells": []},
+        unsaved=[],
+        sheets=[{"id": "main", "name": "Основная таблица", "is_primary": True}],
+        can_write=True,
+        busy=False,
+    )
+    page.set_mode("edit")
+    page.table.setCurrentCell(0, FROZEN_COLUMNS)
+    QApplication.clipboard().setText("155")
+    page._paste_cells()
+    assert drafts == [("r010", "s1", "155")]
     app.processEvents()
 
 
@@ -1075,7 +1446,7 @@ def test_custom_report_starts_selected_and_marks_saved_changes():
     app.processEvents()
 
 
-def test_report_preview_opens_fullscreen_like_the_web_sheet():
+def test_report_preview_opens_as_independent_window():
     from PyQt6.QtCore import Qt
     from PyQt6.QtWidgets import QApplication, QLabel, QTableWidget
 
@@ -1104,10 +1475,11 @@ def test_report_preview_opens_fullscreen_like_the_web_sheet():
     assert dialog is not None
     dialog.show()
     app.processEvents()
-    screen = dialog.screen() or app.primaryScreen()
-    assert screen is not None
-    assert dialog.geometry().size() == screen.geometry().size()
-    assert dialog.windowState() & Qt.WindowState.WindowFullScreen
+    flags = dialog.windowFlags()
+    assert flags & Qt.WindowType.WindowMinimizeButtonHint
+    assert flags & Qt.WindowType.WindowMaximizeButtonHint
+    assert flags & Qt.WindowType.WindowCloseButtonHint
+    assert not (dialog.windowState() & Qt.WindowState.WindowFullScreen)
     title = dialog.findChild(QLabel, "report-preview-title")
     assert title is not None and title.text() == "Предпросмотр таблицы"
     assert dialog.grab().toImage().pixelColor(12, 8).name() == "#1f5e93"
@@ -1129,5 +1501,44 @@ def test_report_preview_opens_fullscreen_like_the_web_sheet():
     assert table.item(1, 2).text() == "120"
     assert table.item(1, 2).background().color().name() == "#c8e6c9"
     dialog.close()
+    page.close()
+    app.processEvents()
+
+
+def test_report_page_shows_numbered_notes_under_table():
+    from PyQt6.QtWidgets import QApplication
+
+    from src.services.report_generation import note_marker
+
+    app = QApplication.instance() or QApplication([])
+    from desktop.ui.report_page import ReportPage
+
+    page = ReportPage()
+    page.set_table_data(
+        {
+            "columns": [{"key": "s1", "label": "1", "kind": "stage"}],
+            "parameters": [
+                {"key": "r010", "label": "Высота", "row_kind": "editable", "indent": 1, "unit": "мм"},
+            ],
+        },
+        [{"parameter_key": "r010", "column_key": "s1", "display": "150", "status": "confirmed"}],
+        sheet_id="sheet",
+        notes=[
+            {
+                "id": "n1",
+                "parameter_key": "r010",
+                "column_key": "s1",
+                "text": "Уточнить чертёж",
+                "number": 1,
+            }
+        ],
+    )
+    page.show()
+    app.processEvents()
+    assert page.note_btn.text() == "Добавить примечание"
+    assert note_marker(1) in page.table.item(0, 3).text()
+    assert page.table.item(0, 3).text().startswith("150")
+    assert page.notes_box.isVisible()
+    assert "*1 Уточнить чертёж" in page.notes_box.text()
     page.close()
     app.processEvents()

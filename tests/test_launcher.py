@@ -11,7 +11,7 @@ def _touch(path: Path) -> None:
 
 
 def test_launcher_starts_the_newest_release_exe(tmp_path: Path):
-    older = tmp_path / "releases" / "0.0.1" / "GrandSummary" / "GrandSummary.exe"
+    older = tmp_path / "releases" / "0.0.1" / "GrandSummary.exe"
     newer = tmp_path / "releases" / "0.0.10" / "GrandSummary.exe"
     _touch(older)
     _touch(newer)
