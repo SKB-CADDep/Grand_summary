@@ -169,14 +169,32 @@ def test_create_object_does_not_change_catalog_file(client):
     assert "ТЭЦ-2 (ст.5) К-300 (зав.T-202)" not in names
 
 
-def test_default_objects_catalog_is_local_test_folder(monkeypatch):
+def test_default_database_paths_use_fileserver(monkeypatch):
     monkeypatch.delenv("GRAND_SUMMARY_OBJECTS_FILE", raising=False)
     monkeypatch.delenv("GRAND_SUMMARY_OBJECTS_DIR", raising=False)
-    from src.paths import objects_database_path, project_root
+    monkeypatch.delenv("GRAND_SUMMARY_MATERIALS_DIR", raising=False)
+    from src.paths import materials_database_dir, objects_database_dir, objects_database_path
 
-    path = objects_database_path()
-    assert path == project_root() / "временно бд объектов для тестов" / "projects.json"
-    assert path.is_file()
+    base = Path(
+        r"\\fileserver\УТЗ\10 Служба технического директора\05 СКБт\ОАП\1. Проекты\Grand summary\Временное бд"
+    )
+    objects_dir = base / "временно бд объектов для тестов"
+    assert objects_database_dir() == objects_dir
+    assert objects_database_path() == objects_dir / "projects.json"
+    assert materials_database_dir() == base / "Библиотека материалов"
+
+
+def test_relative_database_overrides_use_project_root(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("GRAND_SUMMARY_OBJECTS_DIR", "local objects")
+    monkeypatch.setenv("GRAND_SUMMARY_OBJECTS_FILE", "local objects/catalog.json")
+    monkeypatch.setenv("GRAND_SUMMARY_MATERIALS_DIR", "local materials")
+    from src.paths import materials_database_dir, objects_database_dir, objects_database_path, project_root
+
+    root = project_root()
+    assert objects_database_dir() == root / "local objects"
+    assert objects_database_path() == root / "local objects" / "catalog.json"
+    assert materials_database_dir() == root / "local materials"
 
 
 def test_workbook_requires_object_and_table(client):

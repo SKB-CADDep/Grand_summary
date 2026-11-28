@@ -1,6 +1,7 @@
 """Копирование релиза с общей папки в локальный каталог пользователя."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -51,6 +52,19 @@ def dist_root(exe_dir: Path | None = None) -> Path | None:
     if not getattr(sys, "frozen", False):
         return None
     return SHARED_UPDATES_DIR
+
+
+def _same_file_contents(first: Path, second: Path) -> bool:
+    if first.stat().st_size != second.stat().st_size:
+        return False
+    digests = []
+    for path in (first, second):
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        digests.append(digest.digest())
+    return digests[0] == digests[1]
 
 
 def read_manifest(root: Path | None) -> dict | None:
@@ -209,8 +223,19 @@ def resolve_app_exe(*, dist: Path | None, app_root: Path, progress=None) -> Path
     manifest = read_manifest(dist) if dist is not None else None
     exe_name = manifest["exe_name"] if manifest else APP_EXE_NAME
     local_version = installed_version(root)
-    if remote_version and (local_version is None or version_key(remote_version) > version_key(local_version)):
-        if release_exe(remote_version, root, exe_name) is None:
+    refresh_same_version = False
+    if remote_version and local_version and version_key(remote_version) == version_key(local_version):
+        source_exe = release_exe(remote_version, Path(dist), exe_name, releases_subdir=(manifest["releases_subdir"] if manifest else "releases"))
+        local_exe = release_exe(local_version, root, exe_name)
+        refresh_same_version = bool(
+            source_exe and local_exe and not _same_file_contents(source_exe, local_exe)
+        )
+    if remote_version and (
+        local_version is None
+        or version_key(remote_version) > version_key(local_version)
+        or refresh_same_version
+    ):
+        if release_exe(remote_version, root, exe_name) is None or refresh_same_version:
             copy_release_version(remote_version, dist=Path(dist), app_root=root, exe_name=exe_name, progress=progress)
         write_manifest(root, remote_version, exe_name=exe_name)
         cleanup_older_releases(root, remote_version)

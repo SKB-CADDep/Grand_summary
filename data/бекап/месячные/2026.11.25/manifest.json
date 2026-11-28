@@ -1,0 +1,10 @@
+{
+  "kind": "monthly",
+  "created_at": "2026-11-25T15:56:15",
+  "files": {
+    "grand_summary.db": {
+      "sha256": "1daf4c2ac8f7dd67f2061809ab0c53b6dea81390652c813a7de4770325a9e077",
+      "size": 13443072
+    }
+  }
+}

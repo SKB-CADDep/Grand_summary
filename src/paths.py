@@ -23,6 +23,11 @@ def project_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def _configured_project_path(value: str) -> Path:
+    path = Path(value).expanduser()
+    return path if path.is_absolute() else project_root() / path
+
+
 def frontend_dist() -> Path:
     return bundle_root() / "frontend" / "dist"
 
@@ -63,40 +68,42 @@ def triangle_mapping_path() -> Path:
     return templates_dir() / "triangle_mapping.json"
 
 
-# False — локальная папка для тестов. True — каталог на файловом сервере.
-USE_FILESERVER_OBJECTS = False
+# По умолчанию используем каталоги на файловом сервере.
+USE_FILESERVER_OBJECTS = True
 FILESERVER_OBJECTS_DATABASE = Path(
-    r"\\Fileserver\утз\10 Служба технического директора\05 СКБт\!Общая\objects\projects.json"
+    r"\\fileserver\УТЗ\10 Служба технического директора\05 СКБт\ОАП\1. Проекты\Grand summary\Временное бд\временно бд объектов для тестов\projects.json"
 )
 
 
 def objects_database_dir() -> Path:
     configured = str(os.environ.get("GRAND_SUMMARY_OBJECTS_DIR") or "").strip()
     if configured:
-        return Path(configured).expanduser()
+        return _configured_project_path(configured)
+    if USE_FILESERVER_OBJECTS:
+        return FILESERVER_OBJECTS_DATABASE.parent
     return project_root() / "временно бд объектов для тестов"
 
 
 def objects_database_path() -> Path:
     configured = str(os.environ.get("GRAND_SUMMARY_OBJECTS_FILE") or "").strip()
     if configured:
-        return Path(configured).expanduser()
+        return _configured_project_path(configured)
     if USE_FILESERVER_OBJECTS:
         return FILESERVER_OBJECTS_DATABASE
     return objects_database_dir() / "projects.json"
 
 
-# False — папка «Библиотека материалов» в проекте. True — каталог на файловом сервере.
-USE_FILESERVER_MATERIALS = False
+# По умолчанию используем каталог на файловом сервере.
+USE_FILESERVER_MATERIALS = True
 FILESERVER_MATERIALS_DIR = Path(
-    r"\\Fileserver\утз\10 Служба технического директора\05 СКБт\!Общая\БД Материалов"
+    r"\\fileserver\УТЗ\10 Служба технического директора\05 СКБт\ОАП\1. Проекты\Grand summary\Временное бд\Библиотека материалов"
 )
 
 
 def materials_database_dir() -> Path:
     configured = str(os.environ.get("GRAND_SUMMARY_MATERIALS_DIR") or "").strip()
     if configured:
-        return Path(configured).expanduser()
+        return _configured_project_path(configured)
     if USE_FILESERVER_MATERIALS:
         return FILESERVER_MATERIALS_DIR
     return project_root() / "Библиотека материалов"
